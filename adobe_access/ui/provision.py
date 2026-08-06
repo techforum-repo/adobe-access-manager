@@ -177,7 +177,15 @@ def _render_step_access() -> None:
         active_template = get_template(int(st.session_state.active_template_id))
         if active_template:
             template_groups = list(active_template.get("groups", []))
-            st.info(f"Template applied: {active_template['name']}. You can still add or remove groups.")
+            info_col, remove_col = st.columns([5, 1])
+            info_col.info(f"Template applied: {active_template['name']}. You can still add or remove groups.")
+            if remove_col.button("Remove template", key="remove_active_template"):
+                # Only detaches the "applied template" badge/reference — leaves the
+                # current group selection alone, since the user may have added or
+                # removed groups by hand since applying it.
+                st.session_state.active_template_id = None
+                st.session_state.pop("provision_template_id", None)
+                st.rerun()
             catalog_names = set(groups["adobe_group_name"]) if not groups.empty else set()
             missing_groups = [g for g in template_groups if g not in catalog_names]
             if missing_groups:
