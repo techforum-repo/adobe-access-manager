@@ -8,6 +8,9 @@ from typing import Any
 
 import pandas as pd
 
+from .logging_setup import get_logger
+from .utils import harden_file_permissions, sanitize_log_field
+
 DB_PATH = Path(__file__).resolve().parent.parent / "access_manager.db"
 
 
@@ -67,6 +70,40 @@ def initialize() -> None:
           PRIMARY KEY(template_id, adobe_group_name),
           FOREIGN KEY(template_id) REFERENCES templates(id) ON DELETE CASCADE
         )""")
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS app_settings (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          updated_by TEXT NOT NULL DEFAULT ''
+        )""")
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS connection_status (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          checked_at TEXT NOT NULL,
+          success INTEGER NOT NULL,
+          mode TEXT NOT NULL,
+          detail TEXT NOT NULL DEFAULT ''
+        )""")
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS executions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          request_id INTEGER,
+          actor TEXT NOT NULL,
+          started_at TEXT NOT NULL,
+          completed_at TEXT NOT NULL,
+          duration_ms INTEGER NOT NULL,
+          test_only INTEGER NOT NULL DEFAULT 1,
+          status TEXT NOT NULL,
+          created_count INTEGER NOT NULL DEFAULT 0,
+          existing_count INTEGER NOT NULL DEFAULT 0,
+          groups_added_count INTEGER NOT NULL DEFAULT 0,
+          already_assigned_count INTEGER NOT NULL DEFAULT 0,
+          failed_count INTEGER NOT NULL DEFAULT 0,
+          retry_count_total INTEGER NOT NULL DEFAULT 0,
+          results_json TEXT NOT NULL DEFAULT '[]',
+          FOREIGN KEY(request_id) REFERENCES recent_requests(id)
+        )""")
 
         # One-time migration from the prototype JSON template table.
         legacy_exists = conn.execute(
@@ -91,6 +128,9 @@ def initialize() -> None:
                             (template_id, str(group), index),
                         )
         conn.commit()
+    # The DB holds real PII (emails, group memberships, full Adobe API responses)
+    # — restrict it to the owning user (POSIX; no-op on Windows, see the docstring).
+    harden_file_permissions(DB_PATH)
 
 def record(actor: str, action: str, email: str, groups: list[str], status: str, details: str = "") -> None:
     with _connect() as conn:
@@ -99,6 +139,17 @@ def record(actor: str, action: str, email: str, groups: list[str], status: str, 
             (datetime.now(timezone.utc).isoformat(), actor, action, email, json.dumps(groups), status, details),
         )
         conn.commit()
+    try:
+        # actor/details are free text (e.g. the "Signed in as" field) — sanitize
+        # before writing to the flat-file log so a crafted value can't forge
+        # additional fake-looking log lines (CR/LF injection).
+        get_logger().info(
+            "actor=%s action=%s email=%s status=%s details=%s",
+            sanitize_log_field(actor), sanitize_log_field(action), sanitize_log_field(email or "-"),
+            sanitize_log_field(status), sanitize_log_field(details)[:500],
+        )
+    except Exception:
+        pass  # Logging must never break an audited action.
 
 
 def read(limit: int = 500) -> pd.DataFrame:
@@ -409,3 +460,202 @@ def workflow_summary(actor: str | None = None) -> dict[str, Any]:
         "favorite_count": favorite_count,
         "template_count": template_count,
     }
+
+
+def update_request_status(request_id: int, status: str) -> None:
+    _ensure_workflow_tables()
+    with _connect() as conn:
+        conn.execute("UPDATE recent_requests SET status=? WHERE id=?", (status, request_id))
+        conn.commit()
+
+
+def save_execution(
+    request_id: int | None,
+    actor: str,
+    started_at: str,
+    completed_at: str,
+    test_only: bool,
+    results: list[dict[str, Any]],
+) -> int:
+    """Persist one Execute run. `results` is one row per attempted user (see provisioning.execute)."""
+    created = sum(1 for r in results if r.get("success") and r.get("created"))
+    existing = sum(1 for r in results if r.get("success") and not r.get("created"))
+    groups_added = sum(len(r.get("groups_added") or []) for r in results if r.get("success"))
+    already_assigned = sum(len(r.get("already_assigned") or []) for r in results if r.get("success"))
+    failed = sum(1 for r in results if not r.get("success"))
+    retries = sum(int(r.get("retries") or 0) for r in results)
+    status = "Succeeded" if failed == 0 else ("Failed" if failed == len(results) else "Partial")
+    start_dt = datetime.fromisoformat(started_at)
+    end_dt = datetime.fromisoformat(completed_at)
+    duration_ms = max(0, int((end_dt - start_dt).total_seconds() * 1000))
+    with _connect() as conn:
+        cursor = conn.execute(
+            """INSERT INTO executions(
+                   request_id, actor, started_at, completed_at, duration_ms, test_only, status,
+                   created_count, existing_count, groups_added_count, already_assigned_count,
+                   failed_count, retry_count_total, results_json
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                request_id, actor, started_at, completed_at, duration_ms, 1 if test_only else 0, status,
+                created, existing, groups_added, already_assigned, failed, retries, json.dumps(results),
+            ),
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+
+
+def list_executions_for_request(request_id: int) -> pd.DataFrame:
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT id, request_id, actor, started_at, completed_at, duration_ms, test_only, status,
+                      created_count, existing_count, groups_added_count, already_assigned_count,
+                      failed_count, retry_count_total, results_json
+               FROM executions WHERE request_id=? ORDER BY id DESC""",
+            (request_id,),
+        ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["results"] = json.loads(item.pop("results_json") or "[]")
+        item["test_only"] = bool(item["test_only"])
+        result.append(item)
+    return pd.DataFrame(result)
+
+
+def get_execution(execution_id: int) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            """SELECT id, request_id, actor, started_at, completed_at, duration_ms, test_only, status,
+                      created_count, existing_count, groups_added_count, already_assigned_count,
+                      failed_count, retry_count_total, results_json
+               FROM executions WHERE id=?""",
+            (execution_id,),
+        ).fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    item["results"] = json.loads(item.pop("results_json") or "[]")
+    item["test_only"] = bool(item["test_only"])
+    return item
+
+
+def requests_today_failed_count() -> int:
+    """Count today's saved requests whose preview summary reported any lookup failures."""
+    _ensure_workflow_tables()
+    today = datetime.now(timezone.utc).date().isoformat()
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT summary_json FROM recent_requests WHERE substr(created_at,1,10)=?",
+            (today,),
+        ).fetchall()
+    count = 0
+    for row in rows:
+        summary = json.loads(row["summary_json"] or "{}")
+        if int(summary.get("failures", 0) or 0) > 0:
+            count += 1
+    return count
+
+
+def most_used_templates(limit: int = 5) -> pd.DataFrame:
+    """Return the most frequently used templates across saved requests."""
+    _ensure_workflow_tables()
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT template_name, COUNT(*) AS uses
+               FROM recent_requests
+               WHERE template_name != ''
+               GROUP BY template_name
+               ORDER BY uses DESC, template_name COLLATE NOCASE
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    return pd.DataFrame([dict(row) for row in rows], columns=["template_name", "uses"])
+
+
+# --- Non-secret setting overrides -------------------------------------------------
+# Secrets (Adobe credentials, write-mode flag) always stay in .env. These overrides
+# only ever cover the operational fields listed in adobe_access.settings_store.
+
+def get_setting_overrides() -> dict[str, str]:
+    with _connect() as conn:
+        rows = conn.execute("SELECT key, value FROM app_settings").fetchall()
+    return {str(row["key"]): str(row["value"]) for row in rows}
+
+
+def set_setting_overrides(values: dict[str, str], actor: str) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    with _connect() as conn:
+        conn.executemany(
+            """INSERT INTO app_settings(key, value, updated_at, updated_by) VALUES(?,?,?,?)
+               ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at, updated_by=excluded.updated_by""",
+            [(key, str(value), now, actor) for key, value in values.items()],
+        )
+        conn.commit()
+
+
+def clear_setting_overrides(keys: list[str] | None = None) -> None:
+    with _connect() as conn:
+        if keys:
+            conn.executemany("DELETE FROM app_settings WHERE key=?", [(key,) for key in keys])
+        else:
+            conn.execute("DELETE FROM app_settings")
+        conn.commit()
+
+
+# --- Diagnostics --------------------------------------------------------------------
+
+def record_connection_check(success: bool, mode: str, detail: str = "") -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    with _connect() as conn:
+        conn.execute(
+            """INSERT INTO connection_status(id, checked_at, success, mode, detail) VALUES(1,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET checked_at=excluded.checked_at, success=excluded.success,
+                   mode=excluded.mode, detail=excluded.detail""",
+            (now, 1 if success else 0, mode, detail),
+        )
+        conn.commit()
+
+
+def last_connection_check() -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT checked_at, success, mode, detail FROM connection_status WHERE id = 1"
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "checked_at": row["checked_at"],
+        "success": bool(row["success"]),
+        "mode": row["mode"],
+        "detail": row["detail"],
+    }
+
+
+def sqlite_health() -> dict[str, Any]:
+    with _connect() as conn:
+        integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+        page_count = int(conn.execute("PRAGMA page_count").fetchone()[0])
+        page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
+    return {
+        "integrity": str(integrity),
+        "ok": str(integrity).lower() == "ok",
+        "size_bytes": page_count * page_size,
+        "path": str(DB_PATH),
+    }
+
+
+def table_counts() -> dict[str, int]:
+    tables = [
+        "audit_events", "managed_groups", "templates", "template_groups",
+        "favorite_groups", "recent_requests", "app_settings", "executions",
+    ]
+    with _connect() as conn:
+        existing = {
+            str(row[0]) for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        return {
+            table: int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])  # noqa: S608 (fixed allowlist above)
+            for table in tables if table in existing
+        }

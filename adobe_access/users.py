@@ -19,7 +19,7 @@ class UserLookupError(ValueError):
 def normalize_lookup_email(value: str) -> str:
     email = str(value or "").strip().lower()
     if not _EMAIL_RE.match(email):
-        raise UserLookupError("Enter a complete email address, for example firstname.lastname@bsci.com.")
+        raise UserLookupError("Enter a complete email address, for example firstname.lastname@example.com.")
     return email
 
 
@@ -43,12 +43,26 @@ def lookup_user(email: str) -> dict[str, Any] | None:
 
 
 def membership_table(user: dict[str, Any], managed_groups: pd.DataFrame | None = None) -> pd.DataFrame:
-    """Return only memberships present in the synchronized custom user-group cache."""
+    """Return only memberships present in the synchronized custom user-group cache.
+
+    `.attrs["ignored_non_custom_memberships"]` on the result reports how many of
+    the user's real Adobe memberships were excluded because they're not in the
+    local custom-group cache (product profiles, admin groups, groups that haven't
+    been synced, ...) — context that this table is a subset, not the user's full
+    Adobe membership list.
+    """
     cached = read_managed_groups() if managed_groups is None else managed_groups.copy()
     memberships = sorted(set(user.get("groups") or set()), key=str.casefold)
     columns = ["display_name", "system", "adobe_group_name", "cached"]
-    if not memberships or cached.empty or "adobe_group_name" not in cached.columns:
-        return pd.DataFrame(columns=columns)
+
+    def _finalize(frame: pd.DataFrame, ignored: int) -> pd.DataFrame:
+        frame.attrs["ignored_non_custom_memberships"] = ignored
+        return frame
+
+    if not memberships:
+        return _finalize(pd.DataFrame(columns=columns), 0)
+    if cached.empty or "adobe_group_name" not in cached.columns:
+        return _finalize(pd.DataFrame(columns=columns), len(memberships))
 
     metadata: dict[str, dict[str, Any]] = {}
     canonical_names: dict[str, str] = {}
@@ -61,10 +75,12 @@ def membership_table(user: dict[str, Any], managed_groups: pd.DataFrame | None =
         canonical_names[key] = group_name
 
     rows: list[dict[str, Any]] = []
+    ignored = 0
     for returned_name in memberships:
         key = str(returned_name).strip().casefold()
         item = metadata.get(key)
         if item is None:
+            ignored += 1
             continue
         canonical_name = canonical_names[key]
         rows.append({
@@ -75,11 +91,12 @@ def membership_table(user: dict[str, Any], managed_groups: pd.DataFrame | None =
         })
 
     if not rows:
-        return pd.DataFrame(columns=columns)
-    return pd.DataFrame(rows, columns=columns).sort_values(
+        return _finalize(pd.DataFrame(columns=columns), ignored)
+    result = pd.DataFrame(rows, columns=columns).sort_values(
         ["system", "display_name", "adobe_group_name"],
         key=lambda col: col.astype(str).str.casefold(),
     ).reset_index(drop=True)
+    return _finalize(result, ignored)
 
 
 def user_export_table(user: dict[str, Any], memberships: pd.DataFrame) -> pd.DataFrame:

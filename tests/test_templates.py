@@ -29,7 +29,7 @@ def test_template_crud_and_duplicate(temp_db):
         "Standard reporting access",
         "CJA",
         ["BSC-CJA-REPORTING", "BSC-CJA-USERS", "BSC-CJA-USERS"],
-        "tester@bsci.com",
+        "tester@example.com",
     )
     template = get_template(template_id)
     assert template["name"] == "CJA Analyst"
@@ -42,13 +42,13 @@ def test_template_crud_and_duplicate(temp_db):
         "Updated",
         "CJA",
         ["BSC-CJA-REPORTING"],
-        "editor@bsci.com",
+        "editor@example.com",
     )
     updated = get_template(template_id)
     assert updated["name"] == "CJA Analyst Updated"
     assert updated["groups"] == ["BSC-CJA-REPORTING"]
 
-    duplicate_id = duplicate_template(template_id, "CJA Analyst Copy", "tester@bsci.com")
+    duplicate_id = duplicate_template(template_id, "CJA Analyst Copy", "tester@example.com")
     duplicated = get_template(duplicate_id)
     assert duplicated["groups"] == updated["groups"]
     assert len(list_templates()) == 2

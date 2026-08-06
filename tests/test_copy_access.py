@@ -16,13 +16,13 @@ def test_copy_preview_marks_existing_and_new_memberships():
     result = build_copy_access_preview(
         source,
         target_users,
-        ["one@bsci.com", "two@bsci.com"],
+        ["one@example.com", "two@example.com"],
         ["BSC-CJA-user", "BSC-AEM-author"],
         cached,
     )
     assert len(result) == 4
-    one = result[result["email"] == "one@bsci.com"]
+    one = result[result["email"] == "one@example.com"]
     assert set(one["membership_status"]) == {"Already assigned", "Will add"}
-    two = result[result["email"] == "two@bsci.com"]
+    two = result[result["email"] == "two@example.com"]
     assert set(two["target_status"]) == {"New user"}
     assert two["will_add"].all()

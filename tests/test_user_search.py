@@ -7,7 +7,7 @@ from adobe_access.users import UserLookupError, membership_table, normalize_look
 
 
 def test_normalize_lookup_email() -> None:
-    assert normalize_lookup_email("  Person.Name@BSCI.COM ") == "person.name@bsci.com"
+    assert normalize_lookup_email("  Person.Name@EXAMPLE.COM ") == "person.name@example.com"
     with pytest.raises(UserLookupError):
         normalize_lookup_email("person")
 
@@ -30,7 +30,7 @@ def test_membership_table_enriches_cached_groups() -> None:
 
 def test_user_export_table_is_flat() -> None:
     user = {
-        "email": "person@bsci.com",
+        "email": "person@example.com",
         "first_name": "Person",
         "last_name": "Example",
         "identity_type": "federatedID",
@@ -40,5 +40,5 @@ def test_user_export_table_is_flat() -> None:
         {"display_name": "CJA User", "system": "CJA", "adobe_group_name": "BSC-CJA-user", "cached": True}
     ])
     result = user_export_table(user, memberships)
-    assert result.loc[0, "email"] == "person@bsci.com"
+    assert result.loc[0, "email"] == "person@example.com"
     assert result.loc[0, "adobe_group_name"] == "BSC-CJA-user"

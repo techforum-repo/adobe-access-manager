@@ -7,7 +7,7 @@ from adobe_access.users import membership_table
 def test_nested_user_object_is_not_used_as_email():
     payload = {
         "user": {
-            "username": "albin.issac@bsci.com",
+            "username": "albin.issac@example.com",
             "firstname": "albin",
             "lastname": "issac",
             "type": "federatedID",
@@ -15,7 +15,7 @@ def test_nested_user_object_is_not_used_as_email():
         }
     }
     user = normalize_user(payload)
-    assert user["email"] == "albin.issac@bsci.com"
+    assert user["email"] == "albin.issac@example.com"
     assert user["first_name"] == "albin"
     assert user["last_name"] == "issac"
     assert user["identity_type"] == "federatedID"

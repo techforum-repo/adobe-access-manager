@@ -8,6 +8,7 @@ from urllib.parse import quote
 import httpx
 
 from .config import settings
+from .settings_store import default_country, default_identity_type
 from .utils import classify_environment, classify_system, is_privileged
 
 
@@ -16,13 +17,20 @@ def _group_type(item: dict[str, Any]) -> str:
 
 
 def is_user_group(item: dict[str, Any]) -> bool:
+    """Return True only when Adobe explicitly tags this as a user group.
+
+    A bare/ambiguous "group" type, or no type field at all, is not treated as
+    a user group — Adobe's groups endpoint tags real user groups explicitly
+    ("user-group" / "USER_GROUP"), so anything less than that is excluded
+    rather than guessed from the name. Failing closed here matters: this
+    filter decides what gets cached as "safe to assign during provisioning",
+    and silently caching a product profile or admin group as a user group
+    would be a real safety problem, not just a cosmetic one.
+    """
     kind = _group_type(item)
-    if kind in {"user_group", "usergroup", "group"}:
+    if kind in {"user_group", "usergroup"}:
         return True
-    if kind in {"product_profile", "productprofile", "license_group", "product", "admin_group"}:
-        return False
-    name = str(item.get("groupName") or item.get("name") or "")
-    return bool(name) and not name.startswith("_") and not item.get("productName") and not item.get("licenseGroupName")
+    return False
 
 
 def _first_value(mapping: dict[str, Any], *keys: str) -> Any:
@@ -148,7 +156,7 @@ class MockAdobeClient:
             {"name": "CJA-ANALYSTS", "system": "CJA", "environment": "Production", "privileged": False, "member_count": 72},
         ]
         self.users: dict[str, dict[str, Any]] = {
-            "existing.user@bsci.com": {"email": "existing.user@bsci.com", "first_name": "Existing", "last_name": "User", "identity_type": "federatedID", "status": "active", "groups": {"AEM-PROD-AUTHORS"}}
+            "existing.user@example.com": {"email": "existing.user@example.com", "first_name": "Existing", "last_name": "User", "identity_type": "federatedID", "status": "active", "groups": {"AEM-PROD-AUTHORS"}}
         }
 
     async def test_connection(self) -> dict[str, Any]:
@@ -166,13 +174,14 @@ class MockAdobeClient:
     async def provision(self, email: str, first_name: str, last_name: str, groups: list[str], test_only: bool) -> dict[str, Any]:
         existing = self.users.get(email.lower())
         missing = [g for g in groups if not existing or g not in existing["groups"]]
+        will_create = not bool(existing)
         if test_only:
-            return {"success": True, "test_only": True, "created": not bool(existing), "groups_added": missing, "raw": {}}
+            return {"success": True, "test_only": True, "created": will_create, "groups_added": missing, "raw": {}}
         if not existing:
             existing = {"email": email.lower(), "first_name": first_name, "last_name": last_name, "identity_type": "federatedID", "status": "active", "groups": set()}
             self.users[email.lower()] = existing
         existing["groups"].update(missing)
-        return {"success": True, "test_only": False, "created": not bool(existing), "groups_added": missing, "raw": {}}
+        return {"success": True, "test_only": False, "created": will_create, "groups_added": missing, "raw": {}}
 
 
 class AdobeUMAPIClient:
@@ -274,8 +283,8 @@ class AdobeUMAPIClient:
         missing = [g for g in groups if g not in current]
         steps: list[dict[str, Any]] = []
         if not existing:
-            action = {"email": email, "country": settings.default_country.upper(), "firstname": first_name, "lastname": last_name, "option": "ignoreIfAlreadyExists"}
-            identity = settings.default_identity_type.lower()
+            action = {"email": email, "country": default_country().upper(), "firstname": first_name, "lastname": last_name, "option": "ignoreIfAlreadyExists"}
+            identity = default_identity_type().lower()
             key = "createFederatedID" if identity == "federatedid" else ("createEnterpriseID" if identity == "enterpriseid" else "addAdobeID")
             steps.append({key: action})
         if missing:

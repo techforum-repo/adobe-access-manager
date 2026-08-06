@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
+# Leading characters that make Excel/Sheets/Numbers interpret a CSV cell as a
+# formula instead of literal text (CSV/formula injection, OWASP-recognized).
+_FORMULA_TRIGGER_CHARS = ("=", "+", "-", "@", "\t", "\r")
 
 
 @dataclass(frozen=True)
@@ -66,3 +75,54 @@ def classify_environment(name: str) -> str:
 def is_privileged(name: str) -> bool:
     upper = name.upper()
     return any(x in upper for x in ("ADMIN", "OWNER", "DEVELOPER"))
+
+
+def sanitize_csv_cell(value: Any) -> Any:
+    """Neutralize CSV/formula injection: a cell starting with =, +, -, @, or a tab
+    is prefixed with a single quote so spreadsheet apps treat it as literal text
+    instead of executing it as a formula when a downstream user opens the export.
+    Non-strings (numbers, booleans, None/NaN) pass through unchanged."""
+    if not isinstance(value, str) or not value:
+        return value
+    return f"'{value}" if value[0] in _FORMULA_TRIGGER_CHARS else value
+
+
+def safe_csv(df: pd.DataFrame, *, index: bool = False) -> str:
+    """CSV export with formula-injection protection applied to every text column.
+
+    Use this instead of calling `df.to_csv()` directly whenever a DataFrame may
+    contain user-controlled free text (template names/descriptions, actor names,
+    notes, audit details, ...) that a downstream admin might open in Excel/Sheets.
+    """
+    sanitized = df.copy()
+    for column in sanitized.columns:
+        if sanitized[column].dtype == object:
+            sanitized[column] = sanitized[column].map(sanitize_csv_cell)
+    return sanitized.to_csv(index=index)
+
+
+def sanitize_log_field(value: Any) -> str:
+    """Replace control characters (CR/LF/tab/...) with spaces before writing
+    free-text user input (actor, details, ...) to the flat-file log — otherwise
+    a crafted value (e.g. the free-text "Signed in as" field) could forge
+    additional fake-looking log lines."""
+    return "".join(" " if ord(ch) < 32 or ord(ch) == 127 else ch for ch in str(value))
+
+
+def harden_file_permissions(path: Path, *, mode: int = 0o600) -> None:
+    """Restrict a local data file (SQLite DB, log file) to the owning user only.
+
+    Defaults to 0o600 (owner read/write). Pass mode=0o700 for a directory —
+    it needs the execute bit to stay traversable, or later file operations
+    inside it (e.g. RotatingFileHandler creating a rotated backup) will fail.
+
+    POSIX only — chmod doesn't provide equivalent access control on Windows, so
+    this is a no-op there; rely on filesystem/user-account isolation instead.
+    Best-effort: never raises, so it can't block app startup or logging.
+    """
+    if os.name == "nt":
+        return
+    try:
+        path.chmod(mode)
+    except OSError:
+        pass
