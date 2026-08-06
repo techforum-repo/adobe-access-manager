@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+import pandas as pd
+import streamlit as st
+
+from adobe_access.database import record
+from adobe_access.provisioning import build_user_table
+from adobe_access.ui.shared import render_friendly_error
+from adobe_access.users import UserLookupError, lookup_user, membership_table, user_export_table
+from adobe_access.utils import safe_csv
+
+
+def render() -> None:
+    st.subheader("User search")
+    st.caption("Look up an Adobe user by exact email address and review their current custom user-group memberships.")
+
+    with st.form("user_lookup_form", clear_on_submit=False):
+        lookup_email = st.text_input(
+            "User email",
+            value=st.session_state.user_search_email_value,
+            placeholder="firstname.lastname@example.com",
+        )
+        search_submitted = st.form_submit_button("Search Adobe", type="primary")
+    search_submitted = search_submitted or st.session_state.pop("_retry_user_search", False)
+
+    if search_submitted:
+        st.session_state.user_search_email_value = lookup_email.strip().lower()
+        try:
+            with st.spinner("Looking up the user in Adobe..."):
+                found_user = lookup_user(lookup_email)
+            st.session_state.user_search_result = found_user
+            record(
+                st.session_state.actor,
+                "user-lookup",
+                lookup_email.strip().lower(),
+                [],
+                "Found" if found_user else "Not found",
+                "Exact Adobe user lookup",
+            )
+        except UserLookupError as exc:
+            st.session_state.user_search_result = None
+            if render_friendly_error(exc, key="retry_user_search", context=f"While looking up {lookup_email.strip() or 'the user'}."):
+                st.session_state["_retry_user_search"] = True
+                st.rerun()
+
+    searched_email = st.session_state.user_search_email_value
+    user = st.session_state.user_search_result
+    if searched_email and user is None:
+        st.warning(f"No Adobe user was found for {searched_email}.")
+        if st.button("Prepare as a new provisioning request", type="secondary"):
+            st.session_state.users = build_user_table([searched_email])
+            st.session_state.selected_groups = []
+            st.session_state.preview = pd.DataFrame()
+            st.session_state.provision_step = 2
+            st.session_state.pending_navigation = "Provision access"
+            st.rerun()
+
+    if user:
+        name = user.get("display_name") or user.get("email") or "Unknown user"
+        st.markdown(f"### {name}")
+        st.caption(str(user.get("email") or ""))
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Identity type", user.get("identity_type") or "Unknown")
+        c2.metric("Status", user.get("status") or "Unknown")
+        memberships = membership_table(user)
+        c3.metric("Custom user groups", len(memberships))
+        ignored = memberships.attrs.get("ignored_non_custom_memberships", 0)
+        if ignored:
+            st.caption(f"{ignored} other Adobe membership(s) not shown — not in the synced custom-group cache.")
+
+        if memberships.empty:
+            st.info("This user has no memberships in the locally synchronized Adobe custom user groups.")
+        else:
+            system_options = ["All"] + sorted(memberships["system"].dropna().astype(str).unique().tolist())
+            f1, f2 = st.columns([3, 2])
+            membership_query = f1.text_input("Filter memberships", key="user_membership_filter")
+            membership_system = f2.selectbox("System", system_options, key="user_membership_system")
+            membership_view = memberships.copy()
+            if membership_query:
+                membership_view = membership_view[
+                    membership_view["display_name"].str.contains(membership_query, case=False, na=False)
+                    | membership_view["adobe_group_name"].str.contains(membership_query, case=False, na=False)
+                ]
+            if membership_system != "All":
+                membership_view = membership_view[membership_view["system"] == membership_system]
+
+            display_memberships = membership_view[["display_name", "system", "adobe_group_name"]].rename(columns={
+                "display_name": "Display name",
+                "system": "System",
+                "adobe_group_name": "Adobe user group",
+            })
+            st.dataframe(display_memberships, width='stretch', hide_index=True)
+
+        export_df = user_export_table(user, memberships)
+        a1, a2 = st.columns([1, 3])
+        a1.download_button(
+            "Export custom groups",
+            safe_csv(export_df),
+            f"{user.get('email', 'adobe-user')}-custom-groups.csv",
+            "text/csv",
+            width='stretch',
+        )
+        if a2.button("Provision additional access", type="primary", width='content'):
+            st.session_state.users = build_user_table([str(user.get("email") or "")])
+            st.session_state.selected_groups = []
+            st.session_state.preview = pd.DataFrame()
+            st.session_state.provision_step = 2
+            st.session_state.pending_navigation = "Provision access"
+            st.rerun()

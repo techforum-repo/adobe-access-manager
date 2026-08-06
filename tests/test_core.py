@@ -3,13 +3,13 @@ from adobe_access.utils import derive_name, validate_email
 
 
 def test_name_derivation():
-    p = derive_name("john.smith@bsci.com")
+    p = derive_name("john.smith@example.com")
     assert p.first_name == "John" and p.last_name == "Smith"
 
 
 def test_domain_validation():
-    assert validate_email("john.smith@bsci.com", {"bsci.com"})[0]
-    assert not validate_email("john.smith@gmail.com", {"bsci.com"})[0]
+    assert validate_email("john.smith@example.com", {"example.com"})[0]
+    assert not validate_email("john.smith@gmail.com", {"example.com"})[0]
 
 
 def test_user_group_filter():

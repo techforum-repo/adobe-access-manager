@@ -5,7 +5,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     mock_adobe: bool = True
     adobe_write_enabled: bool = False
-    allowed_email_domains: str = "bsci.com"
+    allowed_email_domains: str = "example.com"
     default_country: str = "US"
     default_identity_type: str = "federatedID"
     cache_ttl_seconds: int = 600

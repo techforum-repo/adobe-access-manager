@@ -24,7 +24,7 @@ def test_membership_table_returns_only_cached_custom_groups_case_insensitively()
 
 def test_user_export_contains_only_user_and_custom_group_columns():
     user = {
-        "email": "albin.issac@bsci.com",
+        "email": "albin.issac@example.com",
         "first_name": "Albin",
         "last_name": "Issac",
         "identity_type": "federatedID",

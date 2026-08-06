@@ -6,7 +6,7 @@ import pandas as pd
 def test_normalize_nested_exact_user_response():
     payload = {
         "user": {
-            "username": "Jane.Doe@bsci.com",
+            "username": "Jane.Doe@example.com",
             "firstname": "Jane",
             "lastname": "Doe",
             "type": "federatedID",
@@ -18,7 +18,7 @@ def test_normalize_nested_exact_user_response():
         }
     }
     user = normalize_user(payload)
-    assert user["email"] == "jane.doe@bsci.com"
+    assert user["email"] == "jane.doe@example.com"
     assert user["first_name"] == "Jane"
     assert user["identity_type"] == "federatedID"
     assert user["groups"] == {"BSC-CJA-QA", "SYSTEM-PROFILE"}
