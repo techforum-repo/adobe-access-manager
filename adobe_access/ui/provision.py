@@ -178,6 +178,15 @@ def _render_step_access() -> None:
         if active_template:
             template_groups = list(active_template.get("groups", []))
             st.info(f"Template applied: {active_template['name']}. You can still add or remove groups.")
+            catalog_names = set(groups["adobe_group_name"]) if not groups.empty else set()
+            missing_groups = [g for g in template_groups if g not in catalog_names]
+            if missing_groups:
+                st.warning(
+                    f"{len(missing_groups)} of {len(template_groups)} group(s) from this template aren't in the "
+                    "synced group cache, so they weren't added to the selection below: "
+                    f"{', '.join(missing_groups)}. They may have been renamed or removed in Adobe — try "
+                    "re-syncing on User groups, or edit the template."
+                )
             with st.expander(f"Groups from template ({len(template_groups)})", expanded=True):
                 if template_groups:
                     template_group_rows = []
@@ -188,6 +197,7 @@ def _render_step_access() -> None:
                             "Display name": metadata.get("display_name") or group_name,
                             "System": metadata.get("system") or active_template.get("system") or "Other",
                             "Adobe user group": group_name,
+                            "In synced cache": "No — not selected" if group_name in missing_groups else "Yes",
                         })
                     st.dataframe(pd.DataFrame(template_group_rows), width='stretch', hide_index=True)
                 else:
