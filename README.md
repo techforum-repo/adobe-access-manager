@@ -209,10 +209,7 @@ corporate proxy is slow).
 - **User search** — two tabs. "Search Adobe" does a live, exact-email lookup (always
   current). "Browse synced users" searches a local directory cache instead — including a
   blank search to list everyone synced — populated by its own "Sync users from Adobe"
-  action (mirrors how User groups syncs), capped at `ADOBE_USER_SYNC_MAX_PAGES` pages
-  (default 10; set to `0` for no cap — sync fetches every page Adobe has). Adobe doesn't
-  publish a fixed page size, so rather than guess one, the sync tells you outright if it
-  got truncated by the cap instead of silently showing a partial directory.
+  action (mirrors how User groups syncs, fetching every page Adobe has, no cap).
   Each cached user's custom-group count is computed against the *current* group cache,
   so it stays accurate even without re-syncing users after a group sync.
 - **Templates**, **User groups**, **Compare users**, **Copy access** — as before.

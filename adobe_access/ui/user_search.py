@@ -4,7 +4,6 @@ import pandas as pd
 import streamlit as st
 
 from adobe_access.client import client
-from adobe_access.config import settings
 from adobe_access.database import record, replace_managed_users, user_catalog_status
 from adobe_access.provisioning import build_user_table, run
 from adobe_access.ui.shared import render_friendly_error
@@ -41,35 +40,13 @@ def _render_sync_header() -> None:
     sync_requested = c1.button("Sync users from Adobe", type="primary") or st.session_state.pop("_retry_user_sync", False)
     c2.metric("Cached users", status["user_count"])
     c3.metric("Last sync", status["synced_at"] or "Never")
-    max_pages_effective = settings.adobe_user_sync_max_pages_effective
-    if max_pages_effective is None:
-        st.caption("Syncs the entire Adobe user directory — no page cap (ADOBE_USER_SYNC_MAX_PAGES=0).")
-    else:
-        st.caption(
-            f"Syncs up to Adobe's first {max_pages_effective} pages of results "
-            "(set ADOBE_USER_SYNC_MAX_PAGES in .env to change, or 0 for no cap). "
-            "If a sync gets truncated, you'll see a warning here — it won't happen silently."
-        )
     if sync_requested:
         try:
             with st.spinner("Reading the Adobe user directory and replacing the local cache..."):
-                users, truncated = run(client.list_users(max_pages=max_pages_effective))
-                result = replace_managed_users(users)
-            detail = f"{result}" + (" (truncated by page cap)" if truncated else "")
-            record(st.session_state.actor, "user-cache-replace", "", [], "Success", detail)
-            if truncated:
-                # Deliberately skip st.rerun() here (unlike the clean-sync path
-                # below) so this warning doesn't flash and vanish on the next
-                # run — it's the one message from this page worth making sure
-                # is actually seen.
-                st.warning(
-                    f"Synced {result['users']} users, but stopped at the "
-                    f"{max_pages_effective}-page cap — there may be more. Raise "
-                    "ADOBE_USER_SYNC_MAX_PAGES in .env (0 = no cap) and sync again."
-                )
-            else:
-                st.success(f"Sync complete. Cached {result['users']} users — Adobe confirmed that's everyone.")
-                st.rerun()
+                result = replace_managed_users(run(client.list_users()))
+            record(st.session_state.actor, "user-cache-replace", "", [], "Success", str(result))
+            st.success(f"Sync complete. Cached {result['users']} users.")
+            st.rerun()
         except Exception as exc:
             record(st.session_state.actor, "user-cache-replace", "", [], "Failed", str(exc))
             if render_friendly_error(exc, key="retry_user_sync", context="While syncing the user directory from Adobe."):
