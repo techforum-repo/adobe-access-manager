@@ -51,6 +51,24 @@ def initialize() -> None:
           member_count INTEGER,
           synced_at TEXT NOT NULL
         )""")
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(managed_users)").fetchall()}
+        expected = {
+            "email", "first_name", "last_name", "identity_type", "status",
+            "groups_json", "synced_at",
+        }
+        if columns and columns != {"id", *expected}:
+            conn.execute("DROP TABLE managed_users")
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS managed_users (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          email TEXT NOT NULL UNIQUE,
+          first_name TEXT NOT NULL DEFAULT '',
+          last_name TEXT NOT NULL DEFAULT '',
+          identity_type TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT '',
+          groups_json TEXT NOT NULL DEFAULT '[]',
+          synced_at TEXT NOT NULL
+        )""")
         conn.execute("""
         CREATE TABLE IF NOT EXISTS templates (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -219,6 +237,62 @@ def catalog_status() -> dict[str, Any]:
     with _connect() as conn:
         row = conn.execute("SELECT COUNT(*) group_count, MAX(synced_at) synced_at FROM managed_groups").fetchone()
     return {"group_count": int(row["group_count"] or 0), "synced_at": row["synced_at"]}
+
+
+def replace_managed_users(users: list[dict[str, Any]]) -> dict[str, int | str]:
+    """Full replace of the local user directory cache (mirrors replace_managed_groups).
+
+    `users` is the normalized shape from client.list_users(): email, first_name,
+    last_name, identity_type, status, groups (a set of raw Adobe group names,
+    unfiltered — custom-group filtering happens at display time against whatever
+    the group cache currently holds, the same way membership_table() already
+    does for a single live-looked-up user).
+    """
+    synced_at = datetime.now(timezone.utc).isoformat()
+    rows: list[tuple[Any, ...]] = []
+    seen: set[str] = set()
+    for user in users:
+        email = str(user.get("email") or "").strip().lower()
+        if not email or email in seen:
+            continue
+        seen.add(email)
+        rows.append((
+            email,
+            str(user.get("first_name") or "").strip(),
+            str(user.get("last_name") or "").strip(),
+            str(user.get("identity_type") or "").strip(),
+            str(user.get("status") or "").strip(),
+            json.dumps(sorted(str(g) for g in (user.get("groups") or []))),
+            synced_at,
+        ))
+    with _connect() as conn:
+        conn.execute("DELETE FROM managed_users")
+        conn.executemany(
+            """INSERT INTO managed_users(email,first_name,last_name,identity_type,status,groups_json,synced_at)
+               VALUES(?,?,?,?,?,?,?)""",
+            rows,
+        )
+        conn.commit()
+    return {"users": len(rows), "synced_at": synced_at}
+
+
+def read_managed_users() -> pd.DataFrame:
+    with _connect() as conn:
+        df = pd.read_sql_query(
+            """SELECT email,first_name,last_name,identity_type,status,groups_json,synced_at
+               FROM managed_users ORDER BY email""",
+            conn,
+        )
+    if "groups_json" in df.columns:
+        df["groups"] = df["groups_json"].apply(lambda value: set(json.loads(value or "[]")))
+        df = df.drop(columns=["groups_json"])
+    return df
+
+
+def user_catalog_status() -> dict[str, Any]:
+    with _connect() as conn:
+        row = conn.execute("SELECT COUNT(*) user_count, MAX(synced_at) synced_at FROM managed_users").fetchone()
+    return {"user_count": int(row["user_count"] or 0), "synced_at": row["synced_at"]}
 
 
 
@@ -646,7 +720,7 @@ def sqlite_health() -> dict[str, Any]:
 
 def table_counts() -> dict[str, int]:
     tables = [
-        "audit_events", "managed_groups", "templates", "template_groups",
+        "audit_events", "managed_groups", "managed_users", "templates", "template_groups",
         "favorite_groups", "recent_requests", "app_settings", "executions",
     ]
     with _connect() as conn:
