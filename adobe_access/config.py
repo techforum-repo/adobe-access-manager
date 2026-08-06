@@ -16,7 +16,6 @@ class Settings(BaseSettings):
     adobe_ims_token_url: str = "https://ims-na1.adobelogin.com/ims/token/v3"
     adobe_umapi_base_url: str = "https://usermanagement.adobe.io/v2/usermanagement"
     adobe_http_timeout: float = 60.0
-    adobe_user_sync_max_pages: int = 10
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property
@@ -26,13 +25,6 @@ class Settings(BaseSettings):
     @property
     def adobe_configured(self) -> bool:
         return all((self.adobe_org_id, self.adobe_client_id, self.adobe_client_secret, self.adobe_scopes))
-
-    @property
-    def adobe_user_sync_max_pages_effective(self) -> int | None:
-        """None means "no cap" — client.list_users() fetches every page Adobe
-        has rather than stopping at a fixed count. Set
-        ADOBE_USER_SYNC_MAX_PAGES=0 in .env to enable this."""
-        return None if self.adobe_user_sync_max_pages <= 0 else self.adobe_user_sync_max_pages
 
 
 settings = Settings()

@@ -9,7 +9,6 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 from adobe_access import database, provisioning
-from adobe_access.config import settings
 from adobe_access.users import browse_cached_users, get_cached_user
 
 APP_PATH = str(Path(__file__).resolve().parent.parent / "app.py")
@@ -137,61 +136,3 @@ def test_sync_and_browse_flow_through_the_app(temp_db):
 
     selector = [w for w in at.selectbox if w.label == "Pick a cached user"]
     assert selector, "at least the mock user should be browsable after sync"
-
-
-def test_sync_uses_the_configured_max_pages_setting(temp_db, monkeypatch):
-    """ADOBE_USER_SYNC_MAX_PAGES must actually reach the sync call, not just
-    exist in config.py — this is the property the request was about."""
-    captured = {}
-
-    async def fake_list_users(max_pages=None):
-        captured["max_pages"] = max_pages
-        return [], False  # (users, truncated) — the real client.list_users() shape
-
-    monkeypatch.setattr(provisioning.client, "list_users", fake_list_users)
-    monkeypatch.setattr(settings, "adobe_user_sync_max_pages", 25)
-
-    at = AppTest.from_file(APP_PATH)
-    at.run(timeout=30)
-    at.radio(key="navigation").set_value("User search").run(timeout=30)
-    [b for b in at.button if b.label == "Sync users from Adobe"][0].click().run(timeout=30)
-    assert not at.exception
-    assert captured["max_pages"] == 25
-    # A wrong (users, truncated) return shape from the fake would raise inside
-    # the sync's try/except and get swallowed as a "friendly error" rather than
-    # an at.exception — assert the sync actually succeeded, not just that the
-    # fake was called with the right argument.
-    assert not any(e for e in at.error)
-
-
-def test_max_pages_zero_means_uncapped(temp_db, monkeypatch):
-    captured = {}
-
-    async def fake_list_users(max_pages=None):
-        captured["max_pages"] = max_pages
-        return [], False
-
-    monkeypatch.setattr(provisioning.client, "list_users", fake_list_users)
-    monkeypatch.setattr(settings, "adobe_user_sync_max_pages", 0)
-
-    at = AppTest.from_file(APP_PATH)
-    at.run(timeout=30)
-    at.radio(key="navigation").set_value("User search").run(timeout=30)
-    assert any("no page cap" in c.value.lower() for c in at.caption)
-    [b for b in at.button if b.label == "Sync users from Adobe"][0].click().run(timeout=30)
-    assert not at.exception
-    assert captured["max_pages"] is None
-
-
-def test_truncated_sync_shows_a_warning_and_does_not_hide_it_with_a_rerun(temp_db, monkeypatch):
-    async def fake_list_users(max_pages=None):
-        return [{"email": "a@example.com", "groups": set()}], True  # truncated=True
-
-    monkeypatch.setattr(provisioning.client, "list_users", fake_list_users)
-
-    at = AppTest.from_file(APP_PATH)
-    at.run(timeout=30)
-    at.radio(key="navigation").set_value("User search").run(timeout=30)
-    [b for b in at.button if b.label == "Sync users from Adobe"][0].click().run(timeout=30)
-    assert not at.exception
-    assert any("stopped at the" in w.value for w in at.warning)
