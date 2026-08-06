@@ -165,8 +165,8 @@ class MockAdobeClient:
     async def list_groups(self, max_pages: int | None = None) -> list[dict[str, Any]]:
         return list(self.groups)
 
-    async def list_users(self, max_pages: int | None = None) -> list[dict[str, Any]]:
-        return list(self.users.values())
+    async def list_users(self, max_pages: int | None = None) -> tuple[list[dict[str, Any]], bool]:
+        return list(self.users.values()), False
 
     async def get_user(self, email: str) -> dict[str, Any] | None:
         return self.users.get(email.lower())
@@ -256,19 +256,31 @@ class AdobeUMAPIClient:
             page += 1
         return result
 
-    async def list_users(self, max_pages: int | None = 5) -> list[dict[str, Any]]:
+    async def list_users(self, max_pages: int | None = 5) -> tuple[list[dict[str, Any]], bool]:
+        """Fetch the org's user directory. `max_pages=None` fetches every page
+        Adobe has (no cap) — stops only when Adobe reports `lastPage: true`.
+
+        Returns (users, truncated) — `truncated` is True only when the fetch
+        stopped because it hit `max_pages`, *not* because Adobe said this was
+        the last page, so callers can tell "that's everyone" apart from
+        "there may be more I didn't fetch."
+        """
         result: list[dict[str, Any]] = []
         page = 0
+        truncated = False
         while True:
             url = f"{settings.adobe_umapi_base_url}/users/{quote(settings.adobe_org_id, safe='@')}/{page}"
             data = await self._request("GET", url)
             if not isinstance(data, dict):
                 break
             result.extend(normalize_user(x) for x in data.get("users", []))
-            if data.get("lastPage", True) or (max_pages is not None and page + 1 >= max_pages):
+            if data.get("lastPage", True):
+                break
+            if max_pages is not None and page + 1 >= max_pages:
+                truncated = True
                 break
             page += 1
-        return result
+        return result, truncated
 
     async def get_user(self, email: str) -> dict[str, Any] | None:
         url = f"{settings.adobe_umapi_base_url}/organizations/{quote(settings.adobe_org_id, safe='@')}/users/{quote(email, safe='')}"

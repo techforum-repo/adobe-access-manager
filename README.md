@@ -206,8 +206,16 @@ corporate proxy is slow).
   `ADOBE_WRITE_ENABLED=true`, it also offers **Execute** — gated by a confirmation
   dialog, idempotent, retried with backoff on transient failures, and fully logged
   (see "Production readiness checklist").
-- **Templates**, **User groups**, **User search**, **Compare users**, **Copy access** —
-  as before.
+- **User search** — two tabs. "Search Adobe" does a live, exact-email lookup (always
+  current). "Browse synced users" searches a local directory cache instead — including a
+  blank search to list everyone synced — populated by its own "Sync users from Adobe"
+  action (mirrors how User groups syncs), capped at `ADOBE_USER_SYNC_MAX_PAGES` pages
+  (default 10; set to `0` for no cap — sync fetches every page Adobe has). Adobe doesn't
+  publish a fixed page size, so rather than guess one, the sync tells you outright if it
+  got truncated by the cap instead of silently showing a partial directory.
+  Each cached user's custom-group count is computed against the *current* group cache,
+  so it stays accurate even without re-syncing users after a group sync.
+- **Templates**, **User groups**, **Compare users**, **Copy access** — as before.
 - **Request history** — every preview built in the wizard is saved as a request.
   Search/filter, open the full detail, re-open it in the wizard ("Reuse"), or
   export it. The Dashboard's "Recent requests" widget is a shortcut into this page.

@@ -6,7 +6,7 @@ from typing import Any
 import pandas as pd
 
 from .client import client
-from .database import read_managed_groups
+from .database import read_managed_groups, read_managed_users
 from .provisioning import run
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -40,6 +40,75 @@ def lookup_user(email: str) -> dict[str, Any] | None:
         or result["email"]
     )
     return result
+
+
+def browse_cached_users(query: str = "") -> pd.DataFrame:
+    """Browse the local user directory cache (populated by "Sync users" on the
+    User search page) — no Adobe call. Each row's custom-group count is computed
+    against the *current* group cache rather than stored at sync time, so it
+    stays accurate even if groups are re-synced without re-syncing users.
+    """
+    users = read_managed_users()
+    columns = ["email", "display_name", "identity_type", "status", "custom_group_count"]
+    if users.empty:
+        return pd.DataFrame(columns=columns)
+
+    groups_cache = read_managed_groups()
+    valid_group_keys = {
+        str(name).strip().casefold()
+        for name in groups_cache.get("adobe_group_name", pd.Series(dtype=str))
+        if str(name).strip()
+    }
+
+    rows: list[dict[str, Any]] = []
+    for _, user in users.iterrows():
+        display_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or user["email"]
+        custom_group_count = len(
+            {str(g).strip().casefold() for g in (user.get("groups") or set())} & valid_group_keys
+        )
+        rows.append({
+            "email": user["email"],
+            "display_name": display_name,
+            "identity_type": user.get("identity_type") or "",
+            "status": user.get("status") or "",
+            "custom_group_count": custom_group_count,
+        })
+    result = pd.DataFrame(rows, columns=columns)
+
+    clean_query = query.strip().casefold()
+    if clean_query:
+        mask = (
+            result["email"].str.casefold().str.contains(clean_query, na=False)
+            | result["display_name"].str.casefold().str.contains(clean_query, na=False)
+        )
+        result = result[mask]
+
+    return result.sort_values(
+        "display_name", key=lambda col: col.astype(str).str.casefold()
+    ).reset_index(drop=True)
+
+
+def get_cached_user(email: str) -> dict[str, Any] | None:
+    """Look up one user from the local cache (no Adobe call) — same return shape
+    as lookup_user(), so it's a drop-in for membership_table()/user_export_table()
+    when drilling into one row from the cached-users browse table."""
+    users = read_managed_users()
+    if users.empty:
+        return None
+    match = users[users["email"].str.casefold() == email.strip().casefold()]
+    if match.empty:
+        return None
+    row = match.iloc[0]
+    display_name = f"{row.get('first_name', '')} {row.get('last_name', '')}".strip() or row["email"]
+    return {
+        "email": row["email"],
+        "first_name": row.get("first_name", ""),
+        "last_name": row.get("last_name", ""),
+        "identity_type": row.get("identity_type", ""),
+        "status": row.get("status", ""),
+        "groups": set(row.get("groups") or set()),
+        "display_name": display_name,
+    }
 
 
 def membership_table(user: dict[str, Any], managed_groups: pd.DataFrame | None = None) -> pd.DataFrame:
