@@ -129,7 +129,8 @@ def render() -> None:
                             for _, execution_row in executions_df.iterrows():
                                 execution_detail = get_execution(int(execution_row["id"]))
                                 st.markdown(f"**Execution #{execution_detail['id']}** · {execution_detail['started_at']} · {execution_detail['status']}")
-                                st.json(execution_detail["results"])
+                                with st.container(height=300):
+                                    st.json(execution_detail["results"])
 
                     a1, a2 = st.columns([1, 4])
                     if a1.button("Reuse in wizard", type="primary", key=f"reuse_open_{request['id']}"):

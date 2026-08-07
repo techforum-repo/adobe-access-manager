@@ -66,17 +66,18 @@ def _render_list(templates: pd.DataFrame) -> None:
         st.info("No templates match the current filters." if not templates.empty else "No templates yet — create one above.")
         return
 
-    for _, row in filtered.iterrows():
-        template_id = int(row["id"])
-        is_active = st.session_state.template_manage_id == template_id and st.session_state.template_mode != "Create"
-        with st.container(border=True):
-            c1, c2 = st.columns([4, 1])
-            c1.markdown(f"{'**→** ' if is_active else ''}**{row['name']}**")
-            c1.caption(f"{row['system']} · {row['group_count']} group(s) · updated {str(row['updated_at'])[:10]}")
-            if c2.button("View", key=f"template_view_{template_id}", width='stretch', disabled=is_active):
-                st.session_state.template_manage_id = template_id
-                st.session_state.template_mode = "Browse"
-                st.rerun()
+    with st.container(height=520):
+        for _, row in filtered.iterrows():
+            template_id = int(row["id"])
+            is_active = st.session_state.template_manage_id == template_id and st.session_state.template_mode != "Create"
+            with st.container(border=True):
+                c1, c2 = st.columns([4, 1])
+                c1.markdown(f"{'**→** ' if is_active else ''}**{row['name']}**")
+                c1.caption(f"{row['system']} · {row['group_count']} group(s) · updated {str(row['updated_at'])[:10]}")
+                if c2.button("View", key=f"template_view_{template_id}", width='stretch', disabled=is_active):
+                    st.session_state.template_manage_id = template_id
+                    st.session_state.template_mode = "Browse"
+                    st.rerun()
 
 
 def _render_manage_panel(templates: pd.DataFrame, groups: pd.DataFrame) -> None:

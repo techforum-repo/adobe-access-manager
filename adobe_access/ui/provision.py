@@ -263,20 +263,21 @@ def _render_step_access() -> None:
         header[0].markdown("**Display name**")
         header[1].markdown("**System**")
         header[2].markdown("**Adobe user group**")
-        for name in st.session_state.selected_groups:
-            meta = catalog_lookup.get(str(name).strip().casefold(), {})
-            display_name = (meta.get("display_name") if hasattr(meta, "get") else None) or name
-            system = (meta.get("system") if hasattr(meta, "get") else None) or "Other"
-            is_privileged = bool(meta.get("privileged", False)) if hasattr(meta, "get") else False
-            if is_privileged:
-                privileged_names.append(display_name)
-            c1, c2, c3, c4 = st.columns([3, 2, 3, 1])
-            c1.write(f"{display_name}{' ⚠️' if is_privileged else ''}")
-            c2.write(system)
-            c3.write(name)
-            if c4.button("Remove", key=f"remove_selected_group_{name}"):
-                st.session_state.selected_groups = [g for g in st.session_state.selected_groups if g != name]
-                st.rerun()
+        with st.container(height=280):
+            for name in st.session_state.selected_groups:
+                meta = catalog_lookup.get(str(name).strip().casefold(), {})
+                display_name = (meta.get("display_name") if hasattr(meta, "get") else None) or name
+                system = (meta.get("system") if hasattr(meta, "get") else None) or "Other"
+                is_privileged = bool(meta.get("privileged", False)) if hasattr(meta, "get") else False
+                if is_privileged:
+                    privileged_names.append(display_name)
+                c1, c2, c3, c4 = st.columns([3, 2, 3, 1])
+                c1.write(f"{display_name}{' ⚠️' if is_privileged else ''}")
+                c2.write(system)
+                c3.write(name)
+                if c4.button("Remove", key=f"remove_selected_group_{name}"):
+                    st.session_state.selected_groups = [g for g in st.session_state.selected_groups if g != name]
+                    st.rerun()
         if privileged_names:
             st.warning("Privileged groups selected: " + ", ".join(privileged_names))
 
@@ -415,7 +416,8 @@ def _render_step_review() -> None:
             display_results["already_assigned"] = display_results["already_assigned"].apply(lambda v: "; ".join(v) or "None")
             st.dataframe(display_results, width='stretch', hide_index=True)
             with st.expander("Adobe response detail (per user)"):
-                st.json(results[["email", "adobe_response"]].to_dict("records") if "adobe_response" in results.columns else [])
+                with st.container(height=300):
+                    st.json(results[["email", "adobe_response"]].to_dict("records") if "adobe_response" in results.columns else [])
             dl1, dl2 = st.columns(2)
             dl1.download_button("Download execution CSV", safe_csv(display_results), f"execution-{execution_id}.csv", "text/csv")
             dl2.download_button("Download execution JSON", results.to_json(orient="records", indent=2), f"execution-{execution_id}.json", "application/json")
