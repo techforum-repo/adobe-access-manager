@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from adobe_access import database, provisioning
-from adobe_access.provisioning import build_user_table, execute, execution_summary
+from adobe_access.provisioning import build_user_table, execute, execution_summary, extract_emails_from_first_column
 
 
 @pytest.fixture(autouse=True)
@@ -27,6 +27,42 @@ def _reset_mock_users():
     }
     yield
     provisioning.client.users.clear()
+
+
+def test_build_user_table_excludes_a_non_firstname_lastname_email():
+    users = build_user_table(["newperson@example.com"])
+    row = users.iloc[0]
+    assert row["validation"] == "Invalid"
+    assert bool(row["include"]) is False
+    assert "firstname.lastname" in row["notes"]
+
+
+def test_extract_emails_from_first_column_ignores_other_columns():
+    df = pd.DataFrame({
+        0: ["john.doe@example.com", "jane.smith@example.com"],
+        1: ["Sales", "Marketing"],
+    })
+    assert extract_emails_from_first_column(df) == ["john.doe@example.com", "jane.smith@example.com"]
+
+
+def test_extract_emails_from_first_column_does_not_require_or_skip_a_header_row():
+    """No header row is required — but if a file happens to have one, that row's
+    text just becomes one more value here; build_user_table()'s validate_email()
+    naturally rejects it rather than this needing to guess it's a header."""
+    with_header = pd.DataFrame({0: ["Email", "john.doe@example.com"]})
+    assert extract_emails_from_first_column(with_header) == ["Email", "john.doe@example.com"]
+
+    no_header = pd.DataFrame({0: ["john.doe@example.com", "jane.smith@example.com"]})
+    assert extract_emails_from_first_column(no_header) == ["john.doe@example.com", "jane.smith@example.com"]
+
+
+def test_extract_emails_from_first_column_drops_blank_cells():
+    df = pd.DataFrame({0: ["john.doe@example.com", None, "jane.smith@example.com"]})
+    assert extract_emails_from_first_column(df) == ["john.doe@example.com", "jane.smith@example.com"]
+
+
+def test_extract_emails_from_first_column_handles_an_empty_dataframe():
+    assert extract_emails_from_first_column(pd.DataFrame()) == []
 
 
 def test_execute_creates_new_user_and_adds_groups():

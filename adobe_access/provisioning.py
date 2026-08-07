@@ -15,6 +15,20 @@ def run(coro):
     return asyncio.run(coro)
 
 
+def extract_emails_from_first_column(df: pd.DataFrame) -> list[str]:
+    """First-column values from an uploaded CSV/XLSX — no header row required.
+
+    Read the upload with header=None (see the Provision access "Users" step)
+    so every row is treated as data; if the file *does* have a header row,
+    that text just becomes one more value here, and build_user_table()'s
+    validate_email() naturally rejects it (it won't look like an email) rather
+    than this needing to guess whether row 1 is a header.
+    """
+    if df.empty or df.shape[1] == 0:
+        return []
+    return df.iloc[:, 0].dropna().astype(str).tolist()
+
+
 def build_user_table(emails: list[str]) -> pd.DataFrame:
     seen: set[str] = set()
     rows: list[dict[str, Any]] = []

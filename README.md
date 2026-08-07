@@ -275,6 +275,11 @@ for full setup. CI (`.github/workflows/tests.yml`) runs this on every push/PR ac
 ## Safety behavior
 
 - Only configured email domains are accepted.
+- New-user emails in Provision access must match `firstname.lastname@domain` — exactly two
+  letter-only parts separated by one dot; anything else (a single word, digits, underscores,
+  hyphens, or extra parts) is marked Invalid and excluded from the batch. This is the org's
+  account-naming convention, not general email syntax — it doesn't apply to User search,
+  Compare users, or Copy access, which look up existing addresses of any shape.
 - Existing users are reused.
 - Existing memberships are skipped.
 - Catalog displays user groups and excludes known product-profile/admin records.

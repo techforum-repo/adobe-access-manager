@@ -197,10 +197,26 @@ def group_picker(groups: pd.DataFrame, key_prefix: str, defaults: list[str] | No
         )
         for _, row in groups.iterrows()
     }
+    # Case-insensitive default matching, resolved to the catalog's current
+    # canonical casing (same convention as membership_table()/browse_cached_users()
+    # elsewhere in the app) — a default here can come from a name cached at
+    # some earlier point (e.g. saved into a template), and Adobe isn't
+    # guaranteed to return identical casing for the same group across syncs.
+    # An exact-case match would silently drop an otherwise-valid, currently
+    # cached group from the selection the moment its casing drifted since it
+    # was saved — the multiselect can only select a value that's literally in
+    # `options`, so it must be resolved to that exact current casing, not the
+    # possibly-stale casing the caller passed in.
+    option_by_key = {opt.casefold(): opt for opt in options}
+    resolved_defaults: list[str] = []
+    for value in (defaults or []):
+        canonical = option_by_key.get(str(value).strip().casefold())
+        if canonical and canonical not in resolved_defaults:
+            resolved_defaults.append(canonical)
     selected = st.multiselect(
         "Adobe custom user groups",
         options,
-        default=[value for value in (defaults or []) if value in options],
+        default=resolved_defaults,
         format_func=lambda value: labels.get(value, value),
         key=f"{key_prefix}_selected",
     )
