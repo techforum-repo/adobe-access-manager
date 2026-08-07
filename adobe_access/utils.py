@@ -96,32 +96,55 @@ def is_privileged(name: str) -> bool:
 
 
 # Adobe represents org-level administrative roles — System Administrator,
-# Product Administrator (per product), Profile Administrator (per product
-# profile, a finer-grained level than Product Administrator), Support
-# Administrator, ... — as specially-named entries in a user's own `groups`
-# list, distinct from the custom user groups this app provisions. They never
-# pass client.is_user_group()'s filter on the groups-listing endpoint, so
-# without this they'd silently vanish into membership_table()'s generic
-# "ignored" count.
+# Product Administrator, Profile Administrator, User Group Administrator,
+# Support Administrator, ... — as specially-named entries in a user's own
+# `groups` list, distinct from the custom user groups this app provisions.
+# They never pass client.is_user_group()'s filter on the groups-listing
+# endpoint, so without this they'd silently vanish into membership_table()'s
+# generic "ignored" count.
 #
-# Confirmed against real tenant data that the raw string Adobe returns for
-# the same role type is NOT consistent — observed variants include an
-# underscore-prefixed slug (`_product_admin`, `_developer`) and a
-# human-readable phrase ("Product Administrator ..."). Matched by a
-# case-insensitive prefix pattern on the "core" role phrase rather than an
-# exact string, precisely because of that variability. The underscore-slug
-# form only requires the short "admin" (the leading underscore is itself
-# Adobe's reserved-name marker, a strong enough signal on its own); the
-# non-underscore form requires the full word "Administrator" specifically —
-# bare "Admin" without underscore is too generic and risks misfiring on a
-# real custom group whose name happens to start with it (e.g. "Product Admin
-# Access Group").
+# Per Adobe's own UMAPI documentation (adobe-apiplatform.github.io/umapi-documentation,
+# "Managing Administrators"):
+#   _org_admin, _support_admin, _deployment_admin  — fixed, org-wide roles
+#   _product_admin_<ProductName>                    — Product Administrator
+#   _admin_<ProductProfileName-or-UserGroupName>     — Profile OR User Group Administrator
+#   _developer_<ProductProfileName>                  — Developer
+# Adobe's docs are explicit that `_admin_<name>` is used for BOTH product
+# profile admins and user group admins, with the identical prefix and no
+# field anywhere distinguishing which — confirmed against this app's own
+# real tenant data (two real examples, one of each role, differed only in
+# which one happened to also be a synced custom group name; nothing in
+# either raw string itself said which was which). Adobe's docs say resolving
+# that requires cross-referencing `<name>` against a separate list of
+# profiles/groups. The only such list this app has is its own synced
+# custom-group cache — so `classify_special_permission()`'s
+# `known_group_names` disambiguates by checking whether `<name>`
+# (case-insensitively — group names aren't
+# guaranteed consistent casing, same as everywhere else this app compares
+# them) matches a real, currently-synced group. No match (or no cache
+# supplied) falls back to Profile Administrator — this app never syncs
+# product profiles separately to check against those instead.
 #
-# Product/Profile Administrator apply per product or per product profile —
-# whatever text remains after stripping the matched role phrase and its
-# separators (underscore, hyphen, colon, parentheses) is kept as `detail`
-# (e.g. the product name, "Target") so multiple entries of the same category
-# can be grouped together instead of each showing as an opaque one-off.
+# Adobe's docs also explicitly warn: "avoid any logic that expects fixed
+# group names — these are liable to change without notice." Treat all of
+# this as best-effort, not a guarantee: `raw` is always preserved so a wrong
+# guess is still visible and reportable, never silently swallowed.
+#
+# Also confirmed against real tenant data that the raw string for the same
+# role type is NOT always the underscore-prefixed slug Adobe's docs
+# describe — a human-readable phrase ("Product Administrator ...") has been
+# observed too. Matched by a case-insensitive prefix pattern rather than an
+# exact string for that reason. The non-underscore form requires the full
+# word "Administrator" specifically — bare "Admin" without underscore is too
+# generic and risks misfiring on a real custom group whose name happens to
+# start with it (e.g. "Product Admin Access Group").
+#
+# Product/Profile/User Group Administrator apply per product, product
+# profile, or user group — whatever text remains after stripping the matched
+# role phrase and its separators (underscore, hyphen, colon, parentheses) is
+# kept as `detail` (e.g. the product name, "Target") so multiple entries of
+# the same category can be grouped together instead of each showing as an
+# opaque one-off.
 @dataclass(frozen=True)
 class SpecialPermission:
     category: str  # e.g. "Product Administrator", or the raw name if unrecognized
@@ -134,30 +157,23 @@ _SPECIAL_PERMISSION_EXACT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^_?org[_ ]?admin$", re.I), "System Administrator"),
     (re.compile(r"^_?support[_ ]?admin$", re.I), "Support Administrator"),
     (re.compile(r"^_?deployment[_ ]?admin$", re.I), "Deployment Administrator"),
-    (re.compile(r"^_?licens\w*[_ ]?admin$", re.I), "License Administrator"),
-    (re.compile(r"^_?storage[_ ]?admin$", re.I), "Storage Administrator"),
 ]
 _SPECIAL_PERMISSION_PREFIX_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^(_product[_ ]?admin(istrator)?|Product Administrator)", re.I), "Product Administrator"),
-    (re.compile(r"^(_profile[_ ]?admin(istrator)?|Profile Administrator)", re.I), "Profile Administrator"),
-    # Checked before the generic "_admin" catch-all below, and matches either
-    # word order ("_user_group_admin..." or "_admin_user_group...") since it's
-    # unconfirmed which one this tenant actually returns — previously an
-    # exact-only, single-order pattern, so any suffixed or reordered variant
-    # fell through to the generic catch-all and got merged into Profile
-    # Administrator instead of staying separate.
-    (re.compile(r"^(_user[_ ]?group[_ ]?admin(istrator)?|_admin[_ ]?user[_ ]?group|User Group Administrator)", re.I), "User Group Administrator"),
-    # "_developer..." always groups as Developer, whatever follows.
+    # Confirmed: "_developer_<ProductProfileName>", same shape as the
+    # "_admin_<name>" ambiguity above but Adobe only uses it for one role, so
+    # no disambiguation is needed here.
     (re.compile(r"^_developer", re.I), "Developer"),
-    # Confirmed against real tenant data: an unqualified "_admin..." — no
-    # "product"/"profile"/"user group" immediately after the underscore, so
-    # this doesn't overlap with the patterns above — is this tenant's Profile
-    # Administrator. Underscore-required, unlike the Product/Profile patterns
-    # above — bare "Admin" without it is too generic to safely catch (see the
-    # false-positive note in the module docstring), and no bare "Admin..."
-    # variant has been reported here.
-    (re.compile(r"^_admin", re.I), "Profile Administrator"),
+    # The human-readable phrasing (as opposed to Adobe's documented
+    # "_admin_<name>" slug — see _GENERIC_ADMIN_PATTERN below) names the role
+    # explicitly, so it's unambiguous by construction and needs no
+    # disambiguation against the group cache, unlike the slug form.
+    (re.compile(r"^Profile Administrator", re.I), "Profile Administrator"),
+    (re.compile(r"^User Group Administrator", re.I), "User Group Administrator"),
 ]
+# See the module docstring above — genuinely ambiguous by Adobe's own design,
+# resolved in classify_special_permission() via known_group_names, not here.
+_GENERIC_ADMIN_PATTERN = re.compile(r"^_admin", re.I)
 
 
 def is_special_permission(name: str) -> bool:
@@ -176,9 +192,9 @@ _PRODUCT_PROFILE_ADMIN_CATEGORIES = {"Product Administrator", "Profile Administr
 def _drop_redundant_slug_suffix(detail: str) -> str:
     """Adobe product profile names tend to repeat the readable profile name
     immediately after itself as a lowercase, hyphenated slug, then tack on a
-    technical environment/instance suffix — e.g. "Adobe Experience Manager as
-    a Cloud Service - BSC Enterprise Web Platform-bsc-enterprise-web-platform-
-    therasphere-val-publish". A product name and a profile name are joined by
+    technical environment/instance suffix — e.g. a profile literally named
+    "Example Web Platform" showing up as "Example Web Platform-example-web-
+    platform-prod-publish". A product name and a profile name are joined by
     " - " (spaces around the hyphen); the redundant slug repeat only ever
     shows up within the profile-name segment, glued on with a bare "-" (no
     spaces) — so only that last " - "-delimited segment is searched for a
@@ -207,10 +223,19 @@ def _dedupe_slug_repeat(segment: str) -> str:
         search_from = hyphen_pos + 1
 
 
-def classify_special_permission(name: str) -> SpecialPermission:
+def classify_special_permission(name: str, *, known_group_names: set[str] | None = None) -> SpecialPermission:
     """Best-effort classification. Falls back to the raw Adobe name as its own
     `category` (`recognized=False`) for anything unrecognized, rather than
-    guessing — still visible, just not grouped under a friendly label."""
+    guessing — still visible, just not grouped under a friendly label.
+
+    `known_group_names` — a case-insensitively-normalized (casefolded) set of
+    currently-synced custom group names — disambiguates the generic
+    "_admin_<name>" case (see the module docstring above): if `<name>`
+    matches a real synced group, it's User Group Administrator for that
+    group; otherwise Profile Administrator. Omit it (the default) to always
+    get Profile Administrator for that case, e.g. when no group cache is
+    available to check against.
+    """
     raw = str(name).strip()
     for pattern, category in _SPECIAL_PERMISSION_EXACT_PATTERNS:
         if pattern.match(raw):
@@ -223,13 +248,21 @@ def classify_special_permission(name: str) -> SpecialPermission:
             if category in _PRODUCT_PROFILE_ADMIN_CATEGORIES:
                 detail = _drop_redundant_slug_suffix(detail)
             return SpecialPermission(category=category, detail=detail, raw=raw, recognized=True)
+    generic_match = _GENERIC_ADMIN_PATTERN.match(raw)
+    if generic_match:
+        remainder = raw[generic_match.end():]
+        detail = remainder.strip(" _-:()").replace("_", " ").strip()
+        category = "Profile Administrator"
+        if known_group_names and detail.strip().casefold() in known_group_names:
+            category = "User Group Administrator"
+        return SpecialPermission(category=category, detail=detail, raw=raw, recognized=True)
     return SpecialPermission(category=raw, detail="", raw=raw, recognized=False)
 
 
-def describe_special_permission(name: str) -> str:
+def describe_special_permission(name: str, *, known_group_names: set[str] | None = None) -> str:
     """Single-line friendly label — classify_special_permission()'s category
     plus its detail in parentheses, if any."""
-    result = classify_special_permission(name)
+    result = classify_special_permission(name, known_group_names=known_group_names)
     return f"{result.category} ({result.detail})" if result.detail else result.category
 
 
