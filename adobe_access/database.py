@@ -17,6 +17,9 @@ DB_PATH = Path(__file__).resolve().parent.parent / "access_manager.db"
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    # SQLite does not enforce declared foreign keys (e.g. template_groups'
+    # ON DELETE CASCADE) unless this is set on every connection.
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
@@ -39,6 +42,7 @@ def initialize() -> None:
             "privileged", "member_count", "synced_at",
         }
         if columns and columns != {"id", *expected}:
+            get_logger().info("Dropping managed_groups: schema drift detected, cache will be empty until next sync.")
             conn.execute("DROP TABLE managed_groups")
         conn.execute("""
         CREATE TABLE IF NOT EXISTS managed_groups (
@@ -57,6 +61,7 @@ def initialize() -> None:
             "groups_json", "synced_at",
         }
         if columns and columns != {"id", *expected}:
+            get_logger().info("Dropping managed_users: schema drift detected, cache will be empty until next sync.")
             conn.execute("DROP TABLE managed_users")
         conn.execute("""
         CREATE TABLE IF NOT EXISTS managed_users (
@@ -177,6 +182,13 @@ def read(limit: int = 500) -> pd.DataFrame:
             conn,
             params=(limit,),
         )
+
+
+def count_audit_events() -> int:
+    """Total audit_events rows, independent of read()'s LIMIT — lets the UI say
+    when it's showing a capped subset instead of silently hiding older history."""
+    with _connect() as conn:
+        return int(conn.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0])
 
 
 def audit_summary() -> dict[str, Any]:
@@ -493,6 +505,13 @@ def list_recent_requests(limit: int = 20) -> pd.DataFrame:
         item.update({f"summary_{key}": value for key, value in summary.items()})
         result.append(item)
     return pd.DataFrame(result)
+
+
+def count_recent_requests() -> int:
+    """Total recent_requests rows, independent of list_recent_requests()'s LIMIT."""
+    _ensure_workflow_tables()
+    with _connect() as conn:
+        return int(conn.execute("SELECT COUNT(*) FROM recent_requests").fetchone()[0])
 
 
 def get_recent_request(request_id: int) -> dict[str, Any] | None:

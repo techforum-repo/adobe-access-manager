@@ -79,15 +79,20 @@ def render() -> None:
     })
 
     st.markdown("##### Logs")
-    tail = diagnostics.log_tail(200)
-    if tail:
+    # Read the 500-line tail once, up front — the on-page view only shows the
+    # last 200 of it, and the bundle below reuses the same read instead of
+    # opening and reading the log file a second time.
+    log_lines = diagnostics.log_tail(500).splitlines()
+    if log_lines:
         with st.expander("Recent log lines (last 200)"):
-            st.code(tail)
+            st.code("\n".join(log_lines[-200:]))
     else:
         st.caption("No log file yet — one is created the first time an action is recorded.")
     st.download_button(
         "Download diagnostics bundle (JSON)",
-        diagnostics.diagnostics_bundle(),
+        diagnostics.diagnostics_bundle(
+            environment=env, sqlite=health, counts=counts, connection=connection, log_lines=log_lines,
+        ),
         "diagnostics-bundle.json",
         "application/json",
     )

@@ -9,7 +9,7 @@ scoped and in the same spirit as the existing code.
 git clone <your fork>
 cd adobe-access-manager
 python3 -m venv .venv && source .venv/bin/activate   # or start-unix.sh / start-windows.bat
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # runtime deps + pytest/pyflakes; use requirements.txt alone for a deploy
 cp .env.example .env      # defaults to mock mode — no Adobe credentials needed
 python -m pytest
 streamlit run app.py

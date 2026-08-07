@@ -1,5 +1,3 @@
-import pandas as pd
-
 from adobe_access.provisioning import compare_users
 
 

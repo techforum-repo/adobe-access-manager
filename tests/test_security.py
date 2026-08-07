@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from adobe_access import database
+from adobe_access import config, database
 from adobe_access.utils import harden_file_permissions, sanitize_log_field
 
 APP_PATH = str(Path(__file__).resolve().parent.parent / "app.py")
@@ -60,6 +60,24 @@ def test_initialize_hardens_the_database_file_permissions(tmp_path, monkeypatch)
     monkeypatch.setattr(database, "DB_PATH", db_path)
     database.initialize()
     assert stat.S_IMODE(db_path.stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(os.name == "nt", reason="chmod-based hardening is POSIX-only")
+def test_harden_env_file_restricts_env_permissions(tmp_path, monkeypatch):
+    """.env holds the Adobe client secret — it must get the same treatment as
+    the SQLite DB and the log file, not be left at whatever the OS/umask
+    default was when it was created (often world-readable)."""
+    env_path = tmp_path / ".env"
+    env_path.write_text("ADOBE_CLIENT_SECRET=super-secret\n")
+    env_path.chmod(0o644)
+    monkeypatch.setattr(config, "ENV_PATH", env_path)
+    config.harden_env_file()
+    assert stat.S_IMODE(env_path.stat().st_mode) == 0o600
+
+
+def test_harden_env_file_is_a_no_op_when_env_does_not_exist(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "ENV_PATH", tmp_path / "does-not-exist.env")
+    config.harden_env_file()  # must not raise
 
 
 def test_dashboard_does_not_use_unsafe_html_for_user_controlled_template_names():

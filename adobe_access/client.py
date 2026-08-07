@@ -185,6 +185,10 @@ class MockAdobeClient:
 
 
 class AdobeUMAPIClient:
+    # Pagination loops call _request() once per page; a misbehaving Adobe
+    # response that never sets lastPage would otherwise loop forever.
+    _PAGE_SAFETY_CAP = 20_000
+
     def __init__(self) -> None:
         self._token: str | None = None
         self._expires_at = 0.0
@@ -193,19 +197,21 @@ class AdobeUMAPIClient:
         if not settings.adobe_configured:
             raise RuntimeError("Adobe credentials are incomplete. Update .env and restart the app.")
 
-    async def _token_value(self) -> str:
+    def _new_http_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(timeout=settings.adobe_http_timeout, trust_env=True)
+
+    async def _token_value(self, http: httpx.AsyncClient) -> str:
         self._check_config()
         if self._token and time.time() < self._expires_at - 60:
             return self._token
         try:
-            async with httpx.AsyncClient(timeout=settings.adobe_http_timeout, trust_env=True) as client:
-                response = await client.post(settings.adobe_ims_token_url, data={
-                    "client_id": settings.adobe_client_id,
-                    "client_secret": settings.adobe_client_secret,
-                    "grant_type": "client_credentials",
-                    "scope": settings.adobe_scopes,
-                })
-                response.raise_for_status()
+            response = await http.post(settings.adobe_ims_token_url, data={
+                "client_id": settings.adobe_client_id,
+                "client_secret": settings.adobe_client_secret,
+                "grant_type": "client_credentials",
+                "scope": settings.adobe_scopes,
+            })
+            response.raise_for_status()
         except httpx.HTTPError as exc:
             raise RuntimeError(f"Adobe IMS connection failed: {exc}") from exc
         data = response.json()
@@ -213,17 +219,24 @@ class AdobeUMAPIClient:
         self._expires_at = time.time() + int(data.get("expires_in", 86399))
         return self._token
 
-    async def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {await self._token_value()}", "x-api-key": settings.adobe_client_id, "Accept": "application/json", "Content-Type": "application/json"}
+    async def _headers(self, http: httpx.AsyncClient) -> dict[str, str]:
+        return {"Authorization": f"Bearer {await self._token_value(http)}", "x-api-key": settings.adobe_client_id, "Accept": "application/json", "Content-Type": "application/json"}
 
-    async def _request(self, method: str, url: str, **kwargs: Any) -> Any:
+    async def _request(self, http: httpx.AsyncClient, method: str, url: str, **kwargs: Any) -> Any:
+        """Issue one request on the given (caller-owned) client.
+
+        `http` is always passed explicitly rather than opened per call: a
+        paginated fetch can be dozens to hundreds of requests, and opening a
+        fresh TCP/TLS connection for each one is real, avoidable overhead —
+        every public method below owns one `httpx.AsyncClient` for its full
+        duration (including internal pagination) and reuses it here.
+        """
         try:
-            async with httpx.AsyncClient(timeout=settings.adobe_http_timeout, trust_env=True) as client:
-                response = await client.request(method, url, headers=await self._headers(), **kwargs)
-                if response.status_code == 404:
-                    return {}
-                response.raise_for_status()
-                return response.json() if response.content else {}
+            response = await http.request(method, url, headers=await self._headers(http), **kwargs)
+            if response.status_code == 404:
+                return {}
+            response.raise_for_status()
+            return response.json() if response.content else {}
         except httpx.ConnectError as exc:
             raise RuntimeError(f"Cannot connect to Adobe. Check VPN, proxy, and firewall. Endpoint: {url}") from exc
         except httpx.TimeoutException as exc:
@@ -231,6 +244,12 @@ class AdobeUMAPIClient:
         except httpx.HTTPStatusError as exc:
             detail = exc.response.text[:500]
             raise RuntimeError(f"Adobe returned HTTP {exc.response.status_code}: {detail}") from exc
+        except httpx.HTTPError as exc:
+            # Catch-all for httpx failure modes that aren't a plain connect/timeout/status
+            # error (proxy errors, protocol errors, ...) — still normalized to a
+            # RuntimeError with the endpoint attached, instead of a raw httpx
+            # exception reaching the UI's generic "Something went wrong" fallback.
+            raise RuntimeError(f"Adobe request failed: {exc}. Endpoint: {url}") from exc
 
     async def test_connection(self) -> dict[str, Any]:
         groups = await self.list_groups(max_pages=1)
@@ -239,41 +258,48 @@ class AdobeUMAPIClient:
     async def list_groups(self, max_pages: int | None = None) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         page = 0
-        while True:
-            url = f"{settings.adobe_umapi_base_url}/groups/{quote(settings.adobe_org_id, safe='@')}/{page}"
-            data = await self._request("GET", url)
-            if not isinstance(data, dict):
-                break
-            for item in data.get("groups", []):
-                if not is_user_group(item):
-                    continue
-                name = item.get("groupName") or item.get("name")
-                if not name:
-                    continue
-                result.append({"name": str(name), "system": classify_system(str(name)), "environment": classify_environment(str(name)), "privileged": is_privileged(str(name)), "member_count": item.get("userCount") or item.get("memberCount")})
-            if data.get("lastPage", True) or (max_pages is not None and page + 1 >= max_pages):
-                break
-            page += 1
+        async with self._new_http_client() as http:
+            while True:
+                url = f"{settings.adobe_umapi_base_url}/groups/{quote(settings.adobe_org_id, safe='@')}/{page}"
+                data = await self._request(http, "GET", url)
+                if not isinstance(data, dict):
+                    break
+                for item in data.get("groups", []):
+                    if not is_user_group(item):
+                        continue
+                    name = item.get("groupName") or item.get("name")
+                    if not name:
+                        continue
+                    result.append({"name": str(name), "system": classify_system(str(name)), "environment": classify_environment(str(name)), "privileged": is_privileged(str(name)), "member_count": item.get("userCount") or item.get("memberCount")})
+                if data.get("lastPage", True) or (max_pages is not None and page + 1 >= max_pages):
+                    break
+                page += 1
+                if page >= self._PAGE_SAFETY_CAP:
+                    raise RuntimeError(f"Stopped after {self._PAGE_SAFETY_CAP} pages without Adobe reporting lastPage — the response may be malformed.")
         return result
 
     async def list_users(self) -> list[dict[str, Any]]:
         """Fetch the entire org's user directory — no page cap, same as list_groups()."""
         result: list[dict[str, Any]] = []
         page = 0
-        while True:
-            url = f"{settings.adobe_umapi_base_url}/users/{quote(settings.adobe_org_id, safe='@')}/{page}"
-            data = await self._request("GET", url)
-            if not isinstance(data, dict):
-                break
-            result.extend(normalize_user(x) for x in data.get("users", []))
-            if data.get("lastPage", True):
-                break
-            page += 1
+        async with self._new_http_client() as http:
+            while True:
+                url = f"{settings.adobe_umapi_base_url}/users/{quote(settings.adobe_org_id, safe='@')}/{page}"
+                data = await self._request(http, "GET", url)
+                if not isinstance(data, dict):
+                    break
+                result.extend(normalize_user(x) for x in data.get("users", []))
+                if data.get("lastPage", True):
+                    break
+                page += 1
+                if page >= self._PAGE_SAFETY_CAP:
+                    raise RuntimeError(f"Stopped after {self._PAGE_SAFETY_CAP} pages without Adobe reporting lastPage — the response may be malformed.")
         return result
 
     async def get_user(self, email: str) -> dict[str, Any] | None:
         url = f"{settings.adobe_umapi_base_url}/organizations/{quote(settings.adobe_org_id, safe='@')}/users/{quote(email, safe='')}"
-        data = await self._request("GET", url)
+        async with self._new_http_client() as http:
+            data = await self._request(http, "GET", url)
         return normalize_user(data) if isinstance(data, dict) and data else None
 
     async def provision(self, email: str, first_name: str, last_name: str, groups: list[str], test_only: bool) -> dict[str, Any]:
@@ -294,7 +320,8 @@ class AdobeUMAPIClient:
             return {"success": True, "test_only": test_only, "created": False, "groups_added": [], "raw": {"message": "No changes"}}
         command = [{"user": email, "requestID": str(uuid.uuid4()), "do": steps}]
         url = f"{settings.adobe_umapi_base_url}/action/{quote(settings.adobe_org_id, safe='@')}?testOnly={'true' if test_only else 'false'}"
-        raw = await self._request("POST", url, json=command)
+        async with self._new_http_client() as http:
+            raw = await self._request(http, "POST", url, json=command)
         errors = raw.get("errors", []) if isinstance(raw, dict) else []
         return {"success": not bool(errors), "test_only": test_only, "created": not bool(existing), "groups_added": missing, "raw": raw}
 

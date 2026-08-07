@@ -1,4 +1,14 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from .utils import harden_file_permissions
+
+# Same project-root-relative resolution as database.py's DB_PATH — matches
+# what SettingsConfigDict's relative "env_file" below resolves to as long as
+# the app is started from the project root (true for start-unix.sh /
+# start-windows.bat / `streamlit run app.py` from a checkout).
+ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 
 class Settings(BaseSettings):
@@ -28,3 +38,13 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def harden_env_file() -> None:
+    """Restrict .env (holds the Adobe client secret) to the owning user only —
+    mirrors how database.py hardens the SQLite DB and logging_setup.py hardens
+    the log file. Called explicitly from app.py's startup, not at import time,
+    so importing this module never has filesystem side effects on its own.
+    Best-effort/POSIX-only — see harden_file_permissions()'s docstring."""
+    if ENV_PATH.exists():
+        harden_file_permissions(ENV_PATH)

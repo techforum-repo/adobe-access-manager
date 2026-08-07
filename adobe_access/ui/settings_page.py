@@ -50,19 +50,27 @@ def render() -> None:
         reset_clicked = reset_col.form_submit_button("Reset to .env defaults")
 
     if saved:
-        settings_store.save(
-            {
-                "allowed_email_domains": domains_value,
-                "default_country": country_value.strip().upper(),
-                "default_identity_type": identity_value,
-                "cache_ttl_seconds": int(ttl_value),
-                "auto_adobe_validation": auto_validate_value,
-            },
-            st.session_state.actor,
-        )
-        record(st.session_state.actor, "settings-update", "", [], "Success", "Non-secret operational settings updated")
-        st.toast("Settings saved.")
-        st.rerun()
+        country_clean = country_value.strip().upper()
+        if not (len(country_clean) == 2 and country_clean.isalpha()):
+            st.error(
+                f"'{country_value}' isn't a two-letter country code (e.g. US, CA, GB). "
+                "Settings were not saved — a bad value here would only surface later as "
+                "an Adobe rejection when creating a new user."
+            )
+        else:
+            settings_store.save(
+                {
+                    "allowed_email_domains": domains_value,
+                    "default_country": country_clean,
+                    "default_identity_type": identity_value,
+                    "cache_ttl_seconds": int(ttl_value),
+                    "auto_adobe_validation": auto_validate_value,
+                },
+                st.session_state.actor,
+            )
+            record(st.session_state.actor, "settings-update", "", [], "Success", "Non-secret operational settings updated")
+            st.toast("Settings saved.")
+            st.rerun()
     if reset_clicked:
         settings_store.reset()
         record(st.session_state.actor, "settings-reset", "", [], "Success", "Reset to .env defaults")

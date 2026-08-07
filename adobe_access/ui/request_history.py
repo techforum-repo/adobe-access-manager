@@ -3,19 +3,34 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from adobe_access.database import get_execution, get_recent_request, list_executions_for_request, list_recent_requests
+from adobe_access.database import (
+    count_recent_requests,
+    get_execution,
+    get_recent_request,
+    list_executions_for_request,
+    list_recent_requests,
+)
 from adobe_access.ui.shared import reuse_request
 from adobe_access.utils import safe_csv
+
+_DISPLAY_LIMIT = 1000
 
 
 def render() -> None:
     st.subheader("Request history")
     st.caption("Every preview built from Provision access is saved here. Search, reopen, reuse into the wizard, or export.")
 
-    requests_df = list_recent_requests(1000)
+    requests_df = list_recent_requests(_DISPLAY_LIMIT)
     if requests_df.empty:
         st.info("No requests have been saved yet. Build a preview from Provision access to create one.")
     else:
+        total = count_recent_requests()
+        if total > len(requests_df):
+            st.caption(
+                f"Showing the most recent {len(requests_df)} of {total} total requests — older "
+                "requests still exist but aren't loaded into this view. Use the filters below to "
+                "narrow within what's shown."
+            )
         requests_df["created_at_parsed"] = pd.to_datetime(requests_df["created_at"], errors="coerce", utc=True)
         f1, f2, f3, f4 = st.columns(4)
         query = f1.text_input("Search requester, template, or status", key="request_history_query")
