@@ -212,7 +212,14 @@ corporate proxy is slow).
   action (mirrors how User groups syncs, fetching every page Adobe has, no cap).
   Each cached user's custom-group count is computed against the *current* group cache,
   so it stays accurate even without re-syncing users after a group sync.
-- **Templates**, **User groups**, **Compare users**, **Copy access** — as before.
+- **Templates**, **User groups**, **Compare users** — as before.
+- **Copy access** — copy a source user's synchronized custom user groups to one or more
+  targets. Build a preview first (a live Adobe lookup per target, no changes yet); any
+  group can be removed straight from the preview without rebuilding it. From there,
+  "Run test" always works (Adobe `testOnly=true`, never writes); when `ADOBE_WRITE_ENABLED=true`
+  it also offers **Execute**, reusing the same idempotent, retried, audited execution path
+  as the Provision wizard — gated the same way (confirmation checkbox, disabled unless the
+  flag is set).
 - **Request history** — every preview built in the wizard is saved as a request.
   Search/filter, open the full detail, re-open it in the wizard ("Reuse"), or
   export it. The Dashboard's "Recent requests" widget is a shortcut into this page.
@@ -244,8 +251,8 @@ Before flipping `ADOBE_WRITE_ENABLED=true` against a real tenant:
 
 | Item | Status | Where |
 |---|---|---|
-| Feature flag controls all write operations | ✅ | `ADOBE_WRITE_ENABLED` gates both the UI (Execute section only renders when enabled) and the client (`AdobeUMAPIClient.provision()` raises if a non-test call is attempted while disabled) — two independent checks, never a UI toggle. |
-| Execute requires an explicit confirmation dialog | ✅ | Review step shows exact counts ("Create N users, add M group assignments") plus a required checkbox before Execute is clickable. |
+| Feature flag controls all write operations | ✅ | `ADOBE_WRITE_ENABLED` gates both the UI (Execute section only renders when enabled, on both Provision access's Review step and Copy access) and the client (`AdobeUMAPIClient.provision()` raises if a non-test call is attempted while disabled) — two independent checks, never a UI toggle. |
+| Execute requires an explicit confirmation dialog | ✅ | Review step (and Copy access) shows exact counts ("Create N users, add M group assignments") plus a required checkbox before Execute is clickable. |
 | Every request receives a unique Request ID | ✅ | `recent_requests.id` per preview; each Execute additionally gets its own `executions.id`. |
 | Each Adobe API operation is logged with timestamp and outcome | ✅ | Every user's outcome is written to `audit_events` (visible on Audit history) and mirrored to `logs/access-manager.log`; each Execute run's start/end/duration is stored in `executions`. |
 | Partial failures are reported without stopping unrelated users | ✅ | `execute()` continues past a failed user; the run is marked `Partial` (vs. `Succeeded`/`Failed`) and every row's outcome is shown individually. |
