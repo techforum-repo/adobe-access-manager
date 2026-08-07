@@ -154,6 +154,56 @@ def test_applying_a_template_with_unsynced_groups_warns_instead_of_silently_drop
     assert not [b for b in at.button if b.label == "Build preview"][0].disabled
 
 
+def test_add_selected_favorites_is_disabled_until_something_is_picked(temp_db):
+    """Reported bug: clicking "Add selected favorites" with nothing picked in
+    the "Quick add favorites" box was a silent no-op — no warning, nothing
+    added, Build preview stayed disabled with zero feedback about why. Must
+    disable the button instead, matching every other gated action in this app."""
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=30)
+    _sync_groups(at)
+    database.replace_favorite_groups("local.user@example.com", ["AEM-PROD-AUTHORS"])
+
+    _goto(at, "Provision access")
+    at.text_area[0].set_value("someone.tester@example.com").run(timeout=30)
+    [b for b in at.button if b.label == "Validate and continue"][0].click().run(timeout=30)
+    [b for b in at.button if b.label == "Continue to access"][0].click().run(timeout=30)
+
+    add_btn = [b for b in at.button if b.label == "Add selected favorites"][0]
+    assert add_btn.disabled, "must be disabled before anything is selected in the quick-add box"
+
+    [w for w in at.multiselect if w.label == "Quick add favorites"][0].set_value(["AEM-PROD-AUTHORS"]).run(timeout=30)
+    add_btn2 = [b for b in at.button if b.label == "Add selected favorites"][0]
+    assert not add_btn2.disabled
+    add_btn2.click().run(timeout=30)
+    assert not at.exception
+    assert at.session_state["selected_groups"] == ["AEM-PROD-AUTHORS"]
+    assert not [b for b in at.button if b.label == "Build preview"][0].disabled
+
+
+def test_a_favorite_saved_under_different_casing_still_appears(temp_db):
+    """Same case-drift class as the template-casing bug above: list_favorite_groups()
+    is stored free text, and Adobe isn't guaranteed to return identical casing for
+    the same group across syncs — a favorite must not silently vanish from the
+    quick-add list just because the catalog's casing for it changed since."""
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=30)
+    _sync_groups(at)  # caches "AEM-PROD-AUTHORS"
+    database.replace_favorite_groups("local.user@example.com", ["aem-prod-authors"])  # different case
+
+    _goto(at, "Provision access")
+    at.text_area[0].set_value("someone.tester@example.com").run(timeout=30)
+    [b for b in at.button if b.label == "Validate and continue"][0].click().run(timeout=30)
+    [b for b in at.button if b.label == "Continue to access"][0].click().run(timeout=30)
+
+    quick_add = [w for w in at.multiselect if w.label == "Quick add favorites"]
+    assert quick_add, "the casing mismatch must not make the favorite disappear from quick-add"
+    # .options holds the format_func-rendered labels, not the raw values — the
+    # "AEM" system suffix only resolves correctly if the label lookup matched
+    # the catalog's canonical casing, not the favorite's stored casing.
+    assert quick_add[0].options == ["AEM-PROD-AUTHORS · AEM"], "should resolve to the catalog's current canonical casing"
+
+
 def test_applying_a_template_with_different_group_name_casing_still_selects_it(temp_db):
     """The actual root cause behind a real "Build preview stays disabled" report:
     a group can be genuinely present in the synced cache but under different
