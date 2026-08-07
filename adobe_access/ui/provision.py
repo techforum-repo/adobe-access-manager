@@ -49,7 +49,7 @@ def render() -> None:
 
 
 def _render_step_users() -> None:
-    st.caption("Emails must match the firstname.lastname@domain naming convention — anything else is flagged Invalid on the next step.")
+    st.caption("Emails must match the firstname.lastname@domain naming convention (a trailing digit like john2.doe is OK) — anything else is flagged Invalid on the next step.")
     source = st.radio("Input method", ["Paste emails", "Upload CSV/XLSX"], horizontal=True)
     emails: list[str] = []
     if source == "Paste emails":
@@ -164,7 +164,11 @@ def _render_step_access() -> None:
                 st.rerun()
     else:
         st.caption("No access templates are available. Create one from Templates.")
-    favorites = [group for group in list_favorite_groups(st.session_state.actor) if group in groups.get("adobe_group_name", pd.Series(dtype=str)).tolist()]
+    # Case-insensitive, matching group_picker()'s own default-resolution — a
+    # favorite saved under one casing shouldn't vanish from this list just
+    # because the catalog's casing for that group drifted on a later sync.
+    catalog_by_key = {str(name).strip().casefold(): name for name in groups.get("adobe_group_name", pd.Series(dtype=str))}
+    favorites = [catalog_by_key[str(g).strip().casefold()] for g in list_favorite_groups(st.session_state.actor) if str(g).strip().casefold() in catalog_by_key]
     if favorites:
         with st.expander(f"Favorite groups ({len(favorites)})", expanded=True):
             favorite_rows = groups[groups["adobe_group_name"].isin(favorites)]
@@ -175,9 +179,10 @@ def _render_step_access() -> None:
                 format_func=lambda value: favorite_labels.get(value, value),
                 key="provision_favorite_quick_add",
             )
-            if st.button("Add selected favorites") and add_favorites:
+            if st.button("Add selected favorites", disabled=not add_favorites):
                 st.session_state.selected_groups = list(dict.fromkeys(st.session_state.selected_groups + add_favorites))
                 reset_group_picker("provision")
+                st.toast(f"Added {len(add_favorites)} favorite group(s).")
                 st.rerun()
     st.session_state.selected_groups = group_picker(groups, "provision", st.session_state.selected_groups)
     if st.session_state.active_template_id:

@@ -13,10 +13,12 @@ import pandas as pd
 _FORMULA_TRIGGER_CHARS = ("=", "+", "-", "@", "\t", "\r")
 
 # Required shape for a new user's email in the Provision wizard: exactly two
-# letter-only parts separated by one dot (e.g. "john.doe"). Deliberately
-# strict — no digits, underscores, hyphens, or extra parts — since this is
-# specifically the org's account-naming convention, not general email syntax.
-_FIRSTNAME_LASTNAME_RE = re.compile(r"[A-Za-z]+\.[A-Za-z]+")
+# parts separated by one dot, each letters optionally followed by trailing
+# digits (e.g. "john.doe", "john2.doe" — a common disambiguation suffix when
+# the plain name is already taken). Deliberately strict otherwise — no
+# underscores, hyphens, leading/embedded digits, or extra parts — since this
+# is specifically the org's account-naming convention, not general email syntax.
+_FIRSTNAME_LASTNAME_RE = re.compile(r"[A-Za-z]+\d*\.[A-Za-z]+\d*")
 
 
 @dataclass(frozen=True)
@@ -30,14 +32,22 @@ def normalize_email(value: str) -> str:
     return value.strip().lower()
 
 
+def _strip_disambiguation_suffix(part: str) -> str:
+    """Drop a trailing digit run — a disambiguation suffix like the "2" in
+    "john2" for a "john" that was already taken, not part of the actual name.
+    Falls back to the original part if stripping would empty it entirely
+    (a part that's nothing but digits)."""
+    return re.sub(r"\d+$", "", part) or part
+
+
 def derive_name(email: str) -> ParsedName:
     local = email.split("@", 1)[0]
     parts = [p for p in re.split(r"[._-]+", local) if p]
     if not parts:
         return ParsedName("", "", True)
-    first = parts[0].title()
-    last = " ".join(p.title() for p in parts[1:])
-    ambiguous = len(parts) < 2 or any(ch.isdigit() for ch in local)
+    first = _strip_disambiguation_suffix(parts[0]).title()
+    last = " ".join(_strip_disambiguation_suffix(p).title() for p in parts[1:])
+    ambiguous = len(parts) < 2
     return ParsedName(first, last, ambiguous)
 
 
@@ -49,7 +59,7 @@ def validate_email(email: str, allowed_domains: set[str]) -> tuple[bool, str]:
     if allowed_domains and domain not in allowed_domains:
         return False, f"Only {', '.join(sorted(allowed_domains))} addresses are allowed"
     if not _FIRSTNAME_LASTNAME_RE.fullmatch(local):
-        return False, "Email must be firstname.lastname@domain (letters only, exactly one dot)"
+        return False, "Email must be firstname.lastname@domain (letters, optionally a trailing digit, exactly one dot)"
     return True, ""
 
 
