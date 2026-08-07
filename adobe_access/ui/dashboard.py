@@ -56,6 +56,8 @@ def render() -> None:
         st.session_state.pending_navigation = "User groups"
         st.rerun()
     if q4.button("Create template", width='stretch'):
+        st.session_state.template_mode = "Create"
+        st.session_state.template_manage_id = None
         st.session_state.pending_navigation = "Templates"
         st.rerun()
 

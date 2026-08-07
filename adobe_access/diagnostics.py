@@ -64,14 +64,29 @@ def log_tail(max_lines: int = 500) -> str:
     return "\n".join(lines[-max_lines:])
 
 
-def diagnostics_bundle() -> str:
-    """A single downloadable JSON snapshot: environment + health + recent log tail."""
+def diagnostics_bundle(
+    *,
+    environment: dict[str, Any] | None = None,
+    sqlite: dict[str, Any] | None = None,
+    counts: dict[str, int] | None = None,
+    connection: dict[str, Any] | None = None,
+    log_lines: list[str] | None = None,
+) -> str:
+    """A single downloadable JSON snapshot: environment + health + recent log tail.
+
+    Every piece is independently expensive (sqlite_health() runs a full
+    PRAGMA integrity_check; table_counts() is 9 COUNT(*) queries) and the
+    Diagnostics page already computes all of them once, unconditionally, to
+    render its own always-visible health section. Accepting them here lets
+    the page pass those same values through instead of this function quietly
+    redoing the same queries a second time on every single page view.
+    """
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "environment": environment_info(),
-        "sqlite": sqlite_health(),
-        "table_counts": table_counts(),
-        "last_connection_check": last_connection_check(),
-        "log_tail": log_tail(500).splitlines()[-200:],
+        "environment": environment if environment is not None else environment_info(),
+        "sqlite": sqlite if sqlite is not None else sqlite_health(),
+        "table_counts": counts if counts is not None else table_counts(),
+        "last_connection_check": connection if connection is not None else last_connection_check(),
+        "log_tail": (log_lines if log_lines is not None else log_tail(500).splitlines())[-200:],
     }
     return json.dumps(payload, indent=2, default=str)

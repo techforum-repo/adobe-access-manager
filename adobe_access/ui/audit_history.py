@@ -3,15 +3,24 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from adobe_access.database import read
+from adobe_access.database import count_audit_events, read
 from adobe_access.utils import safe_csv
+
+_DISPLAY_LIMIT = 5000
 
 
 def render() -> None:
-    df = read(5000)
+    df = read(_DISPLAY_LIMIT)
     if df.empty:
         st.info("No audit records found.")
     else:
+        total = count_audit_events()
+        if total > len(df):
+            st.caption(
+                f"Showing the most recent {len(df)} of {total} total audit events — older "
+                "events still exist in the database but aren't loaded into this view. "
+                "Use the filters below to narrow within what's shown."
+            )
         df["created_at_parsed"] = pd.to_datetime(df["created_at"], errors="coerce", utc=True)
         c1, c2, c3, c4 = st.columns(4)
         query = c1.text_input("Search actor, user, action, group or details")

@@ -68,6 +68,56 @@ def test_diagnostics_bundle_is_valid_json(temp_db):
     assert "table_counts" in payload
 
 
+def test_diagnostics_bundle_reuses_precomputed_pieces_instead_of_requerying(temp_db):
+    """The Diagnostics page already computes env/sqlite/counts/log once for its
+    own always-visible display — passing them through must skip re-running the
+    same (sqlite_health() = a full PRAGMA integrity_check, table_counts() = 9
+    COUNT(*) queries) work a second time just to build the download bundle."""
+    sentinel_counts = {"audit_events": 999}
+    payload = json.loads(diagnostics.diagnostics_bundle(
+        environment={"fake": "env"},
+        sqlite={"fake": "sqlite"},
+        counts=sentinel_counts,
+        connection={"fake": "connection"},
+        log_lines=["line one", "line two"],
+    ))
+    assert payload["environment"] == {"fake": "env"}
+    assert payload["sqlite"] == {"fake": "sqlite"}
+    assert payload["table_counts"] == sentinel_counts
+    assert payload["last_connection_check"] == {"fake": "connection"}
+    assert payload["log_tail"] == ["line one", "line two"]
+
+
+def test_diagnostics_page_computes_table_counts_exactly_once(temp_db, monkeypatch):
+    from pathlib import Path
+
+    from streamlit.testing.v1 import AppTest
+
+    from adobe_access.ui import diagnostics_page
+
+    calls = {"n": 0}
+    real_table_counts = database.table_counts
+
+    def counting_table_counts():
+        calls["n"] += 1
+        return real_table_counts()
+
+    # `from adobe_access.database import table_counts` in both diagnostics.py
+    # and diagnostics_page.py binds its own name at import time — patch both,
+    # since a regression (diagnostics_bundle() re-querying instead of reusing
+    # what's passed in) would show up as a second call through diagnostics.py's
+    # binding, not database.py's.
+    monkeypatch.setattr(diagnostics_page, "table_counts", counting_table_counts)
+    monkeypatch.setattr(diagnostics, "table_counts", counting_table_counts)
+
+    app_path = str(Path(__file__).resolve().parent.parent / "app.py")
+    at = AppTest.from_file(app_path)
+    at.run(timeout=30)
+    at.radio(key="navigation").set_value("Diagnostics").run(timeout=30)
+    assert not at.exception
+    assert calls["n"] == 1, "table_counts() should be computed once per page render, not once for display and again for the bundle"
+
+
 def test_check_adobe_connection_persists_result(temp_db):
     result = diagnostics.check_adobe_connection()
     assert result["success"] is True  # mock client always succeeds

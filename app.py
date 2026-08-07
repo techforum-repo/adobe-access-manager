@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from adobe_access.config import harden_env_file
 from adobe_access.database import initialize
 from adobe_access.ui import (
     audit_history,
@@ -25,6 +26,7 @@ from adobe_access.ui.shared import (
 )
 
 initialize()
+harden_env_file()
 st.set_page_config(page_title="Adobe Access Manager", page_icon="🔐", layout="wide")
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 

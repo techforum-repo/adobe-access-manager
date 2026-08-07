@@ -72,8 +72,25 @@ def _parse(field: Field, raw: str) -> Any:
     return raw
 
 
+# These are global app settings (one shared SQLite row set, not per-session
+# state), so a process-wide cache is safe as long as every writer below
+# invalidates it — `save()` and `reset()` are the only two. Read-heavy
+# call sites (e.g. AdobeUMAPIClient.provision(), called once per user during
+# a bulk Execute) would otherwise pay a full DB round-trip per user just to
+# re-read values that can't have changed mid-request.
+_cache: dict[str, Any] | None = None
+
+
+def _invalidate_cache() -> None:
+    global _cache
+    _cache = None
+
+
 def current_values() -> dict[str, Any]:
     """Effective values: a saved DB override if present, else the .env-backed default."""
+    global _cache
+    if _cache is not None:
+        return _cache
     overrides = database.get_setting_overrides()
     values: dict[str, Any] = {}
     for field in FIELDS:
@@ -85,6 +102,7 @@ def current_values() -> dict[str, Any]:
             values[field.key] = _parse(field, raw)
         except (TypeError, ValueError):
             values[field.key] = field.default()
+    _cache = values
     return values
 
 
@@ -100,10 +118,12 @@ def save(values: dict[str, Any], actor: str) -> None:
             continue
         serialized[key] = _from_bool(bool(value)) if field.kind == "bool" else str(value)
     database.set_setting_overrides(serialized, actor)
+    _invalidate_cache()
 
 
 def reset() -> None:
     database.clear_setting_overrides([field.key for field in FIELDS])
+    _invalidate_cache()
 
 
 # --- Convenience accessors used elsewhere in the app --------------------------------
