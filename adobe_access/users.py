@@ -112,6 +112,18 @@ def get_cached_user(email: str) -> dict[str, Any] | None:
     }
 
 
+def _known_group_names() -> set[str]:
+    """Casefolded names of every currently-synced custom user group — the
+    only data this app has to disambiguate Adobe's "_admin_<name>" (Profile
+    Administrator vs. User Group Administrator; see utils.py's module
+    docstring on classify_special_permission for why that's ambiguous by
+    Adobe's own design)."""
+    cached = read_managed_groups()
+    if cached.empty or "adobe_group_name" not in cached.columns:
+        return set()
+    return {str(v).strip().casefold() for v in cached["adobe_group_name"] if str(v).strip()}
+
+
 def special_permissions(user: dict[str, Any]) -> pd.DataFrame:
     """Org-level administrative roles this user holds (System Administrator,
     Product Administrator, Support Administrator, ...) — read directly from
@@ -130,9 +142,10 @@ def special_permissions(user: dict[str, Any]) -> pd.DataFrame:
     columns = ["category", "detail", "raw"]
     if not names:
         return pd.DataFrame(columns=columns)
+    known_groups = _known_group_names()
     rows = [
         {"category": item.category, "detail": item.detail, "raw": item.raw}
-        for item in (classify_special_permission(name) for name in names)
+        for item in (classify_special_permission(name, known_group_names=known_groups) for name in names)
     ]
     return pd.DataFrame(rows, columns=columns)
 
@@ -290,12 +303,13 @@ def compare_special_permissions(left_user: dict[str, Any], right_user: dict[str,
     if not all_names:
         return pd.DataFrame(columns=columns)
 
+    known_groups = _known_group_names()
     rows: list[dict[str, Any]] = []
     for name in all_names:
         left_member = name in left_names
         right_member = name in right_names
         comparison = "Shared" if left_member and right_member else ("Only first user" if left_member else "Only second user")
-        item = classify_special_permission(name)
+        item = classify_special_permission(name, known_group_names=known_groups)
         rows.append({
             "category": item.category,
             "detail": item.detail,

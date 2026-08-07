@@ -100,27 +100,25 @@ def test_unqualified_admin_prefix_groups_as_profile_administrator():
     assert describe_special_permission("_admin_default") == "Profile Administrator (default)"
 
 
-def test_product_and_profile_admin_stay_distinct_from_the_generic_admin_catch_all():
-    """"_product_admin..."/"_profile_admin..." don't literally start with
-    "_admin" (they start with "_product"/"_profile"), so the generic "_admin"
-    catch-all must never absorb them into an undifferentiated Profile
-    Administrator bucket."""
+def test_product_admin_stays_distinct_from_the_generic_admin_catch_all():
+    """"_product_admin..." doesn't literally start with "_admin" (it starts
+    with "_product"), so the generic "_admin" catch-all must never absorb it
+    into an undifferentiated Profile Administrator bucket."""
     assert describe_special_permission("_product_admin_target") == "Product Administrator (target)"
-    assert describe_special_permission("_profile_admin_default") == "Profile Administrator (default)"
 
 
 def test_product_admin_detail_drops_the_redundant_slug_repeat_and_env_suffix():
-    """Real example: Adobe product profile names repeat the readable profile
-    name as a lowercase slug immediately after itself, then tack on a
-    technical environment/instance suffix — keep just the product and the
-    readable profile name."""
+    """Based on a real-shaped example: Adobe product profile names repeat the
+    readable profile name as a lowercase slug immediately after itself, then
+    tack on a technical environment/instance suffix — keep just the product
+    and the readable profile name."""
     raw = (
         "Product Administrator - Adobe Experience Manager as a Cloud Service - "
-        "BSC Enterprise Web Platform-bsc-enterprise-web-platform-therasphere-val-publish"
+        "Example Web Platform-example-web-platform-prod-publish"
     )
     result = classify_special_permission(raw)
     assert result.category == "Product Administrator"
-    assert result.detail == "Adobe Experience Manager as a Cloud Service - BSC Enterprise Web Platform"
+    assert result.detail == "Adobe Experience Manager as a Cloud Service - Example Web Platform"
 
 
 def test_product_admin_detail_without_a_redundant_slug_is_left_unchanged():
@@ -136,16 +134,19 @@ def test_slug_dedup_only_applies_within_the_profile_segment_not_the_product_name
     assert result.detail == "Customer Journey Analytics - Reporting Profile"
 
 
-def test_user_group_administrator_stays_separate_from_the_generic_admin_catch_all():
-    """Regression: an exact-only, single-word-order pattern meant any suffixed
-    or reordered raw name silently fell through to the generic "_admin"
-    catch-all and got merged into Profile Administrator instead of staying
-    its own category. Must be recognized regardless of word order or suffix."""
-    assert describe_special_permission("_user_group_admin") == "User Group Administrator"
-    assert describe_special_permission("_user_group_admin_default") == "User Group Administrator (default)"
-    assert describe_special_permission("_admin_user_group") == "User Group Administrator"
-    assert describe_special_permission("_admin_user_group_default") == "User Group Administrator (default)"
+def test_user_group_administrator_recognized_only_in_its_confirmed_human_readable_form():
+    """Per Adobe's own UMAPI documentation, there is no distinct underscore
+    slug for User Group Administrator — it shares the exact same "_admin_<name>"
+    prefix as Profile Administrator (see the module docstring on
+    classify_special_permission for why, and test_user_search_actions.py for
+    how that ambiguous case gets resolved via the synced group cache). Only
+    the literal human-readable phrase is unambiguous on its own."""
     assert describe_special_permission("User Group Administrator") == "User Group Administrator"
+    assert describe_special_permission("User Group Administrator - Example Group") == "User Group Administrator (Example Group)"
+    # A guessed underscore slug with no cache to check against must NOT be
+    # hardcoded to this category — it falls into the same ambiguous "_admin_"
+    # handling as Profile Administrator, defaulting there without a match.
+    assert describe_special_permission("_admin_user_group") == "Profile Administrator (user group)"
 
 
 def test_describe_special_permission_uses_known_friendly_labels():

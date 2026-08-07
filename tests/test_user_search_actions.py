@@ -1,8 +1,21 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
+from adobe_access import database
 from adobe_access.users import compare_special_permissions, membership_table, special_permissions, user_export_table
+
+
+@pytest.fixture(autouse=True)
+def temp_db(tmp_path, monkeypatch):
+    # special_permissions()/compare_special_permissions() now read the synced
+    # group cache (to disambiguate Adobe's ambiguous "_admin_<name>" — see
+    # utils.py's classify_special_permission()), so every test in this file
+    # needs a real, initialized DB even where it isn't the focus.
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "user_search_actions.db")
+    database.initialize()
+    return database.DB_PATH
 
 
 def test_membership_table_returns_only_cached_custom_groups_case_insensitively():
@@ -49,6 +62,36 @@ def test_special_permissions_gives_each_product_admin_entry_its_own_row_with_det
     assert len(result) == 2
     assert set(result["category"]) == {"Product Administrator"}
     assert set(result["detail"]) == {"target", "aem"}
+
+
+def test_special_permissions_disambiguates_admin_using_the_synced_group_cache():
+    """Confirmed against real tenant data AND Adobe's own UMAPI documentation:
+    "_admin_<name>" is used for BOTH Profile Administrator and User Group
+    Administrator, with nothing in the string itself distinguishing them —
+    Adobe's docs say resolving it requires checking <name> against a real
+    list of profiles/groups. The only such list this app has is its own
+    synced custom-group cache: a matching group name means User Group
+    Administrator for that group; no match means Profile Administrator
+    (product profiles are never synced separately to check against)."""
+    database.replace_managed_groups([
+        {"name": "sample-user-group", "system": "Other"},
+    ])
+    user = {"groups": {
+        "_admin_SampleProfile",  # not a synced group -> Profile Administrator
+        "_admin_sample-user-group",  # is a synced group -> User Group Administrator
+        "_admin_SAMPLE-USER-GROUP",  # same group, different case -> still matches
+    }}
+    result = special_permissions(user)
+    by_raw = dict(zip(result["raw"], result["category"]))
+    assert by_raw["_admin_SampleProfile"] == "Profile Administrator"
+    assert by_raw["_admin_sample-user-group"] == "User Group Administrator"
+    assert by_raw["_admin_SAMPLE-USER-GROUP"] == "User Group Administrator"
+
+
+def test_special_permissions_admin_falls_back_to_profile_administrator_without_a_synced_cache():
+    user = {"groups": {"_admin_sample-user-group"}}
+    result = special_permissions(user)
+    assert result.iloc[0]["category"] == "Profile Administrator"
 
 
 def test_special_permissions_is_empty_for_a_user_with_no_admin_roles():
