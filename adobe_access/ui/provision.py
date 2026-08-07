@@ -20,6 +20,7 @@ from adobe_access.provisioning import (
     build_user_table,
     execute,
     execution_summary,
+    extract_emails_from_first_column,
     preview,
     preview_summary,
     run,
@@ -48,20 +49,26 @@ def render() -> None:
 
 
 def _render_step_users() -> None:
+    st.caption("Emails must match the firstname.lastname@domain naming convention — anything else is flagged Invalid on the next step.")
     source = st.radio("Input method", ["Paste emails", "Upload CSV/XLSX"], horizontal=True)
     emails: list[str] = []
     if source == "Paste emails":
         text = st.text_area("One email per line, or separated by comma/semicolon", height=160)
         emails = [item.strip() for item in text.replace(",", "\n").replace(";", "\n").splitlines() if item.strip()]
     else:
-        upload = st.file_uploader("Upload a file containing an email column", type=["csv", "xlsx"])
+        upload = st.file_uploader("Upload a file with emails in the first column (no header row needed)", type=["csv", "xlsx"])
         if upload:
-            uploaded_df = pd.read_csv(upload) if Path(upload.name).suffix.lower() == ".csv" else pd.read_excel(upload)
-            column = next((c for c in uploaded_df.columns if str(c).lower().strip() in {"email", "email_address", "user"}), None)
-            if column:
-                emails = uploaded_df[column].dropna().astype(str).tolist()
-            else:
-                st.error("No email column was found.")
+            try:
+                uploaded_df = (
+                    pd.read_csv(upload, header=None) if Path(upload.name).suffix.lower() == ".csv"
+                    else pd.read_excel(upload, header=None)
+                )
+            except Exception as exc:
+                st.error(f"Could not read this file: {exc}")
+                uploaded_df = pd.DataFrame()
+            emails = extract_emails_from_first_column(uploaded_df)
+            if not emails:
+                st.warning("No values were found in the first column of this file.")
     if st.button("Validate and continue", type="primary", disabled=not emails):
         st.session_state.users = build_user_table(emails)
         st.session_state.validation_checked = False
@@ -186,8 +193,13 @@ def _render_step_access() -> None:
                 st.session_state.active_template_id = None
                 st.session_state.pop("provision_template_id", None)
                 st.rerun()
-            catalog_names = set(groups["adobe_group_name"]) if not groups.empty else set()
-            missing_groups = [g for g in template_groups if g not in catalog_names]
+            # Case-insensitive, matching group_picker()'s own default-resolution —
+            # Adobe isn't guaranteed to return identical casing for the same
+            # group across syncs, so an exact-case comparison here would flag a
+            # perfectly valid, currently-cached group as "missing" just because
+            # its casing drifted since the template was saved.
+            group_lookup = {str(row["adobe_group_name"]).strip().casefold(): row for _, row in groups.iterrows()} if not groups.empty else {}
+            missing_groups = [g for g in template_groups if str(g).strip().casefold() not in group_lookup]
             if missing_groups:
                 st.warning(
                     f"{len(missing_groups)} of {len(template_groups)} group(s) from this template aren't in the "
@@ -198,9 +210,8 @@ def _render_step_access() -> None:
             with st.expander(f"Groups from template ({len(template_groups)})", expanded=True):
                 if template_groups:
                     template_group_rows = []
-                    group_lookup = groups.set_index("adobe_group_name").to_dict("index") if not groups.empty else {}
                     for group_name in template_groups:
-                        metadata = group_lookup.get(group_name, {})
+                        metadata = group_lookup.get(str(group_name).strip().casefold(), {})
                         template_group_rows.append({
                             "Display name": metadata.get("display_name") or group_name,
                             "System": metadata.get("system") or active_template.get("system") or "Other",

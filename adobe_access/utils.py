@@ -12,6 +12,12 @@ import pandas as pd
 # formula instead of literal text (CSV/formula injection, OWASP-recognized).
 _FORMULA_TRIGGER_CHARS = ("=", "+", "-", "@", "\t", "\r")
 
+# Required shape for a new user's email in the Provision wizard: exactly two
+# letter-only parts separated by one dot (e.g. "john.doe"). Deliberately
+# strict — no digits, underscores, hyphens, or extra parts — since this is
+# specifically the org's account-naming convention, not general email syntax.
+_FIRSTNAME_LASTNAME_RE = re.compile(r"[A-Za-z]+\.[A-Za-z]+")
+
 
 @dataclass(frozen=True)
 class ParsedName:
@@ -39,9 +45,11 @@ def validate_email(email: str, allowed_domains: set[str]) -> tuple[bool, str]:
     email = normalize_email(email)
     if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
         return False, "Invalid email format"
-    domain = email.rsplit("@", 1)[1]
+    local, domain = email.rsplit("@", 1)
     if allowed_domains and domain not in allowed_domains:
         return False, f"Only {', '.join(sorted(allowed_domains))} addresses are allowed"
+    if not _FIRSTNAME_LASTNAME_RE.fullmatch(local):
+        return False, "Email must be firstname.lastname@domain (letters only, exactly one dot)"
     return True, ""
 
 

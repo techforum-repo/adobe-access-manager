@@ -112,7 +112,7 @@ def test_editing_a_template_does_not_leak_into_the_provision_wizard(temp_db):
     # Abandon the edit — no Save/Cancel — and drive the wizard to the Access
     # step without ever touching a template selector there.
     _goto(at, "Provision access")
-    at.text_area[0].set_value("someone@example.com").run(timeout=30)
+    at.text_area[0].set_value("someone.tester@example.com").run(timeout=30)
     [b for b in at.button if b.label == "Validate and continue"][0].click().run(timeout=30)
     [b for b in at.button if b.label == "Continue to access"][0].click().run(timeout=30)
     assert not at.exception
@@ -132,7 +132,7 @@ def test_applying_a_template_with_unsynced_groups_warns_instead_of_silently_drop
     )
 
     _goto(at, "Provision access")
-    at.text_area[0].set_value("someone@example.com").run(timeout=30)
+    at.text_area[0].set_value("someone.tester@example.com").run(timeout=30)
     [b for b in at.button if b.label == "Validate and continue"][0].click().run(timeout=30)
     [b for b in at.button if b.label == "Continue to access"][0].click().run(timeout=30)
     [w for w in at.selectbox if w.key == "provision_template_id"][0].set_value(template_id).run(timeout=30)
@@ -151,6 +151,35 @@ def test_applying_a_template_with_unsynced_groups_warns_instead_of_silently_drop
     assert not [i for i in at.info if "Template applied" in i.value]
     options = [w for w in at.multiselect if w.label == "Adobe custom user groups"][0].options
     [w for w in at.multiselect if w.label == "Adobe custom user groups"][0].set_value([options[0]]).run(timeout=30)
+    assert not [b for b in at.button if b.label == "Build preview"][0].disabled
+
+
+def test_applying_a_template_with_different_group_name_casing_still_selects_it(temp_db):
+    """The actual root cause behind a real "Build preview stays disabled" report:
+    a group can be genuinely present in the synced cache but under different
+    casing than what got saved into the template — Adobe doesn't guarantee
+    identical casing for the same group across syncs. This must resolve to the
+    catalog's current casing, not get treated as missing (group_picker()'s own
+    default-matching, and the stale-groups warning, were both exact-case)."""
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=30)
+    _sync_groups(at)  # caches "AEM-PROD-AUTHORS" (see MockAdobeClient.groups)
+
+    template_id = database.create_template_record(
+        "Legacy Template", "", "AEM", ["aem-prod-authors"], "actor@example.com",  # different case
+    )
+
+    _goto(at, "Provision access")
+    at.text_area[0].set_value("someone.tester@example.com").run(timeout=30)
+    [b for b in at.button if b.label == "Validate and continue"][0].click().run(timeout=30)
+    [b for b in at.button if b.label == "Continue to access"][0].click().run(timeout=30)
+    [w for w in at.selectbox if w.key == "provision_template_id"][0].set_value(template_id).run(timeout=30)
+    [b for b in at.button if b.label == "Apply template"][0].click().run(timeout=30)
+
+    assert not at.warning, "a case-only difference must not be reported as a missing group"
+    assert at.session_state["selected_groups"] == ["AEM-PROD-AUTHORS"], (
+        "should resolve to the catalog's current canonical casing"
+    )
     assert not [b for b in at.button if b.label == "Build preview"][0].disabled
 
 

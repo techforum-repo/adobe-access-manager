@@ -114,9 +114,13 @@ def _render_detail(active: dict, groups: pd.DataFrame) -> None:
         st.caption(f"System: {active['system']} · {active['group_count']} group(s) · updated {str(active['updated_at'])[:10]}")
         st.write(active.get("description") or "No description")
 
-        catalog_names = set(groups["adobe_group_name"]) if not groups.empty else set()
-        group_lookup = groups.set_index("adobe_group_name").to_dict("index") if not groups.empty else {}
-        missing = [g for g in active["groups"] if g not in catalog_names]
+        # Case-insensitive, matching group_picker()'s own default-resolution —
+        # Adobe isn't guaranteed to return identical casing for the same group
+        # across syncs, so an exact-case comparison here would flag a
+        # perfectly valid, currently-cached group as "missing" just because
+        # its casing drifted since the template was saved.
+        group_lookup = {str(row["adobe_group_name"]).strip().casefold(): row for _, row in groups.iterrows()} if not groups.empty else {}
+        missing = [g for g in active["groups"] if str(g).strip().casefold() not in group_lookup]
         if missing:
             st.warning(
                 f"{len(missing)} of {active['group_count']} group(s) aren't in the synced group cache — they'll "
@@ -125,8 +129,8 @@ def _render_detail(active: dict, groups: pd.DataFrame) -> None:
             )
         if active["groups"]:
             rows = [{
-                "Display name": group_lookup.get(g, {}).get("display_name") or g,
-                "System": group_lookup.get(g, {}).get("system") or active.get("system") or "Other",
+                "Display name": group_lookup.get(str(g).strip().casefold(), {}).get("display_name") or g,
+                "System": group_lookup.get(str(g).strip().casefold(), {}).get("system") or active.get("system") or "Other",
                 "Adobe user group": g,
                 "In synced cache": "No" if g in missing else "Yes",
             } for g in active["groups"]]
