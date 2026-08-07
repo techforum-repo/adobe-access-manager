@@ -63,6 +63,12 @@ def test_user_search_shows_special_permissions_for_an_admin(temp_db):
     assert "(2)" in expanders[0].label
     assert any("target" in m.value for m in at.markdown)
     assert any("aem" in m.value for m in at.markdown)
+    # The raw Adobe name must always be visible, for every entry — so a
+    # miscategorized/mislabeled role can be reported with its exact string
+    # rather than guessed at again.
+    assert any("_org_admin" in c.value for c in at.caption)
+    assert any("_product_admin_target" in c.value for c in at.caption)
+    assert any("_product_admin_aem" in c.value for c in at.caption)
 
 
 def test_user_search_shows_no_special_permissions_section_for_a_plain_user(temp_db):
