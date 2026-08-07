@@ -211,8 +211,15 @@ corporate proxy is slow).
   blank search to list everyone synced — populated by its own "Sync users from Adobe"
   action (mirrors how User groups syncs, fetching every page Adobe has, no cap).
   Each cached user's custom-group count is computed against the *current* group cache,
-  so it stays accurate even without re-syncing users after a group sync.
-- **Templates**, **User groups**, **Compare users** — as before.
+  so it stays accurate even without re-syncing users after a group sync. A user's
+  **Special permissions** (System Administrator, Product Administrator, Support
+  Administrator, ...) are shown in their own section — Adobe represents these as
+  underscore-prefixed entries in the user's own `groups`, never part of the synced
+  custom-group cache, so they'd otherwise silently disappear into the generic "N other
+  memberships not shown" count.
+- **Compare users** — also compares each user's Special permissions side by side
+  (Shared / Only first user / Only second user), same idea as the custom-group diff.
+- **Templates**, **User groups** — as before.
 - **Copy access** — copy a source user's synchronized custom user groups to one or more
   targets. Build a preview first (a live Adobe lookup per target, no changes yet); any
   group can be removed straight from the preview without rebuilding it. From there,

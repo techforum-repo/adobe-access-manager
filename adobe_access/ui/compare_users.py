@@ -5,7 +5,14 @@ import streamlit as st
 
 from adobe_access.database import record
 from adobe_access.ui.shared import render_friendly_error
-from adobe_access.users import UserLookupError, compare_custom_group_memberships, lookup_user, membership_table
+from adobe_access.users import (
+    UserLookupError,
+    compare_custom_group_memberships,
+    compare_special_permissions,
+    lookup_user,
+    membership_table,
+    special_permissions,
+)
 from adobe_access.utils import safe_csv
 
 
@@ -52,15 +59,35 @@ def render() -> None:
     right_user = st.session_state.get("compare_right")
     comparison = st.session_state.get("compare_result", pd.DataFrame())
     if left_user and right_user:
+        left_special = special_permissions(left_user)
+        right_special = special_permissions(right_user)
         l1, l2 = st.columns(2)
         with l1:
             st.markdown(f"### {left_user.get('display_name') or left_user.get('email')}")
             st.caption(left_user.get("email", ""))
-            st.metric("Custom groups", len(membership_table(left_user)))
+            lm1, lm2 = st.columns(2)
+            lm1.metric("Custom groups", len(membership_table(left_user)))
+            lm2.metric("Special permissions", len(left_special))
         with l2:
             st.markdown(f"### {right_user.get('display_name') or right_user.get('email')}")
             st.caption(right_user.get("email", ""))
-            st.metric("Custom groups", len(membership_table(right_user)))
+            rm1, rm2 = st.columns(2)
+            rm1.metric("Custom groups", len(membership_table(right_user)))
+            rm2.metric("Special permissions", len(right_special))
+
+        special_comparison = compare_special_permissions(left_user, right_user)
+        if not special_comparison.empty:
+            st.markdown("###### ⚠️ Special permissions")
+            st.caption("Org-level administrative roles — read live from Adobe, not the synced custom-group cache.")
+            st.dataframe(
+                special_comparison.rename(columns={
+                    "role": "Role", "adobe_group_name": "Adobe name",
+                    "left_member": left_user.get("email", "First user"),
+                    "right_member": right_user.get("email", "Second user"),
+                    "comparison": "Result",
+                }),
+                width='stretch', hide_index=True,
+            )
 
         if comparison.empty:
             st.info("Neither user has memberships in the synchronized custom user-group cache.")
