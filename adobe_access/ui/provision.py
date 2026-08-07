@@ -136,8 +136,26 @@ def _render_step_validate() -> None:
 
 
 def _render_step_access() -> None:
+    """Template, favorites, and the custom search picker are all pure *add*
+    actions into `st.session_state.selected_groups` — none of them mirror or
+    get overwritten by another widget's current display state. The "Selected
+    groups" table below is the single source of truth Build preview reads,
+    built directly from that list every render, not from what any picker
+    widget currently happens to show. (Previously the custom picker's
+    multiselect was itself the source of truth — `st.session_state.selected_groups
+    = group_picker(...)` on every render — so if that widget's own displayed
+    state ever fell out of sync with what Apply template/Add favorites had
+    just set, its return value would silently overwrite the correct selection
+    with a stale one. Reported as "applying a template shows it in a table
+    but Build preview doesn't work.")
+    """
     groups = group_catalog()
     templates = list_templates()
+    catalog_lookup = {
+        str(row["adobe_group_name"]).strip().casefold(): row for _, row in groups.iterrows()
+    } if not groups.empty else {}
+
+    st.markdown("###### 1. Apply a template")
     if not templates.empty:
         template_options = {int(row["id"]): str(row["name"]) for _, row in templates.iterrows()}
         selected_template_id = st.selectbox(
@@ -153,79 +171,116 @@ def _render_step_access() -> None:
                 + (f" · {template['description']}" if template.get('description') else "")
             )
             if st.button("Apply template", type="secondary"):
-                applied_groups = list(template["groups"])
-                st.session_state.selected_groups = applied_groups
-                # Reset (not directly overwrite) the widget key: group_picker's own
-                # `default=` filtering then safely re-seeds it from selected_groups,
-                # dropping anything a stale system filter would otherwise choke on.
-                reset_group_picker("provision")
+                template_groups = list(template["groups"])
+                # Case-insensitive, resolved to the catalog's current canonical
+                # casing (not the template's possibly-stale casing) — Adobe
+                # isn't guaranteed to return identical casing for the same
+                # group across syncs, and what ends up in selected_groups is
+                # sent to Adobe verbatim later, so using a stale case here
+                # isn't just a display nit.
+                missing: list[str] = []
+                added: list[str] = []
+                for g in template_groups:
+                    key = str(g).strip().casefold()
+                    if key in catalog_lookup:
+                        added.append(catalog_lookup[key]["adobe_group_name"])
+                    else:
+                        missing.append(g)
+                st.session_state.selected_groups = list(dict.fromkeys(st.session_state.selected_groups + added))
                 st.session_state.active_template_id = int(selected_template_id)
-                st.toast(f"Applied template: {template['name']}")
+                st.session_state["_template_apply_missing"] = missing
+                st.toast(f"Applied template: {template['name']} — added {len(added)} group(s).")
                 st.rerun()
     else:
         st.caption("No access templates are available. Create one from Templates.")
-    # Case-insensitive, matching group_picker()'s own default-resolution — a
-    # favorite saved under one casing shouldn't vanish from this list just
-    # because the catalog's casing for that group drifted on a later sync.
-    catalog_by_key = {str(name).strip().casefold(): name for name in groups.get("adobe_group_name", pd.Series(dtype=str))}
-    favorites = [catalog_by_key[str(g).strip().casefold()] for g in list_favorite_groups(st.session_state.actor) if str(g).strip().casefold() in catalog_by_key]
-    if favorites:
-        with st.expander(f"Favorite groups ({len(favorites)})", expanded=True):
-            favorite_rows = groups[groups["adobe_group_name"].isin(favorites)]
-            favorite_labels = {row["adobe_group_name"]: f"{row['display_name']} · {row['system']}" for _, row in favorite_rows.iterrows()}
-            add_favorites = st.multiselect(
-                "Quick add favorites",
-                favorites,
-                format_func=lambda value: favorite_labels.get(value, value),
-                key="provision_favorite_quick_add",
-            )
-            if st.button("Add selected favorites", disabled=not add_favorites):
-                st.session_state.selected_groups = list(dict.fromkeys(st.session_state.selected_groups + add_favorites))
-                reset_group_picker("provision")
-                st.toast(f"Added {len(add_favorites)} favorite group(s).")
-                st.rerun()
-    st.session_state.selected_groups = group_picker(groups, "provision", st.session_state.selected_groups)
     if st.session_state.active_template_id:
         active_template = get_template(int(st.session_state.active_template_id))
         if active_template:
-            template_groups = list(active_template.get("groups", []))
-            info_col, remove_col = st.columns([5, 1])
-            info_col.info(f"Template applied: {active_template['name']}. You can still add or remove groups.")
-            if remove_col.button("Remove template", key="remove_active_template"):
-                # Only detaches the "applied template" badge/reference — leaves the
-                # current group selection alone, since the user may have added or
-                # removed groups by hand since applying it.
+            r1, r2 = st.columns([5, 1])
+            r1.caption(f"Last template applied: {active_template['name']}")
+            if r2.button("Forget", key="remove_active_template", help="Only clears this reference — doesn't remove any groups it already added."):
                 st.session_state.active_template_id = None
                 st.session_state.pop("provision_template_id", None)
                 st.rerun()
-            # Case-insensitive, matching group_picker()'s own default-resolution —
-            # Adobe isn't guaranteed to return identical casing for the same
-            # group across syncs, so an exact-case comparison here would flag a
-            # perfectly valid, currently-cached group as "missing" just because
-            # its casing drifted since the template was saved.
-            group_lookup = {str(row["adobe_group_name"]).strip().casefold(): row for _, row in groups.iterrows()} if not groups.empty else {}
-            missing_groups = [g for g in template_groups if str(g).strip().casefold() not in group_lookup]
-            if missing_groups:
-                st.warning(
-                    f"{len(missing_groups)} of {len(template_groups)} group(s) from this template aren't in the "
-                    "synced group cache, so they weren't added to the selection below: "
-                    f"{', '.join(missing_groups)}. They may have been renamed or removed in Adobe — try "
-                    "re-syncing on User groups, or edit the template."
-                )
-            with st.expander(f"Groups from template ({len(template_groups)})", expanded=True):
-                if template_groups:
-                    template_group_rows = []
-                    for group_name in template_groups:
-                        metadata = group_lookup.get(str(group_name).strip().casefold(), {})
-                        template_group_rows.append({
-                            "Display name": metadata.get("display_name") or group_name,
-                            "System": metadata.get("system") or active_template.get("system") or "Other",
-                            "Adobe user group": group_name,
-                            "In synced cache": "No — not selected" if group_name in missing_groups else "Yes",
-                        })
-                    st.dataframe(pd.DataFrame(template_group_rows), width='stretch', hide_index=True)
-                else:
-                    st.caption("This template does not contain any groups.")
+    # Set for exactly one rerun by the "Apply template" click above — shown
+    # once, right after the apply that produced it, not on every later render.
+    missing_from_apply = st.session_state.pop("_template_apply_missing", None)
+    if missing_from_apply:
+        st.warning(
+            f"{len(missing_from_apply)} group(s) from that template aren't in the synced group cache, so "
+            f"they weren't added: {', '.join(missing_from_apply)}. They may have been renamed or removed "
+            "in Adobe — try re-syncing on User groups, or edit the template."
+        )
+
+    st.markdown("###### 2. Add favorites")
+    # Case-insensitive, matching the template-apply resolution above — a
+    # favorite saved under one casing shouldn't vanish from this list just
+    # because the catalog's casing for that group drifted on a later sync.
+    favorites = [
+        catalog_lookup[key]["adobe_group_name"] for g in list_favorite_groups(st.session_state.actor)
+        if (key := str(g).strip().casefold()) in catalog_lookup
+    ]
+    if not favorites:
+        st.caption("No favorite groups yet — pin some from User groups.")
+    else:
+        favorite_rows = groups[groups["adobe_group_name"].isin(favorites)]
+        favorite_labels = {row["adobe_group_name"]: f"{row['display_name']} · {row['system']}" for _, row in favorite_rows.iterrows()}
+        add_favorites = st.multiselect(
+            "Quick add favorites",
+            favorites,
+            format_func=lambda value: favorite_labels.get(value, value),
+            key="provision_favorite_quick_add",
+        )
+        if st.button("Add selected favorites", disabled=not add_favorites):
+            st.session_state.selected_groups = list(dict.fromkeys(st.session_state.selected_groups + add_favorites))
+            st.session_state.pop("provision_favorite_quick_add", None)
+            st.toast(f"Added {len(add_favorites)} favorite group(s).")
+            st.rerun()
+
+    st.markdown("###### 3. Search and add custom groups")
+    # Always starts empty — a pure picker for *new* additions, not a mirror of
+    # the current selection, so it never has stale state to fall out of sync
+    # with (the previous source of the reported bug).
+    candidate_groups = group_picker(groups, "provision", [])
+    if st.button("Add selected groups", disabled=not candidate_groups):
+        st.session_state.selected_groups = list(dict.fromkeys(st.session_state.selected_groups + candidate_groups))
+        reset_group_picker("provision")
+        st.toast(f"Added {len(candidate_groups)} group(s).")
+        st.rerun()
+
+    st.divider()
+    st.markdown("###### Selected groups")
+    if not st.session_state.selected_groups:
+        st.info("Nothing selected yet — apply a template, add favorites, or search and add groups above.")
+    else:
+        # A plain st.dataframe/data_editor can't offer a per-row remove action
+        # (data_editor's own row-deletion is a checkbox/trash-icon grid gesture
+        # with no way to test it — Streamlit's AppTest only exposes .value on
+        # a rendered dataframe, not simulated row edits) — render each row
+        # with its own button instead, same pattern as Templates page's list.
+        privileged_names = []
+        header = st.columns([3, 2, 3, 1])
+        header[0].markdown("**Display name**")
+        header[1].markdown("**System**")
+        header[2].markdown("**Adobe user group**")
+        for name in st.session_state.selected_groups:
+            meta = catalog_lookup.get(str(name).strip().casefold(), {})
+            display_name = (meta.get("display_name") if hasattr(meta, "get") else None) or name
+            system = (meta.get("system") if hasattr(meta, "get") else None) or "Other"
+            is_privileged = bool(meta.get("privileged", False)) if hasattr(meta, "get") else False
+            if is_privileged:
+                privileged_names.append(display_name)
+            c1, c2, c3, c4 = st.columns([3, 2, 3, 1])
+            c1.write(f"{display_name}{' ⚠️' if is_privileged else ''}")
+            c2.write(system)
+            c3.write(name)
+            if c4.button("Remove", key=f"remove_selected_group_{name}"):
+                st.session_state.selected_groups = [g for g in st.session_state.selected_groups if g != name]
+                st.rerun()
+        if privileged_names:
+            st.warning("Privileged groups selected: " + ", ".join(privileged_names))
+
+    st.divider()
     b1, b2 = st.columns([1, 4])
     if b1.button("Back"):
         st.session_state.provision_step = 2

@@ -142,16 +142,99 @@ def test_applying_a_template_with_unsynced_groups_warns_instead_of_silently_drop
         "expected a warning naming the missing groups instead of a silently empty selection"
     )
     assert [b for b in at.button if b.label == "Build preview"][0].disabled
+    assert at.session_state["selected_groups"] == [], "no groups from this template were addable"
 
-    # "Remove template" must get you unstuck: clears the banner and lets you
-    # pick groups manually without it reappearing.
-    [b for b in at.button if b.label == "Remove template"][0].click().run(timeout=30)
+    # "Forget" must get you unstuck: clears the reference and lets you pick
+    # groups manually without the warning reappearing.
+    [b for b in at.button if b.label == "Forget"][0].click().run(timeout=30)
     assert not at.exception
     assert at.session_state["active_template_id"] is None
-    assert not [i for i in at.info if "Template applied" in i.value]
-    options = [w for w in at.multiselect if w.label == "Adobe custom user groups"][0].options
-    [w for w in at.multiselect if w.label == "Adobe custom user groups"][0].set_value([options[0]]).run(timeout=30)
+    assert not [c for c in at.caption if "Last template applied" in c.value]
+
+    ms = [w for w in at.multiselect if w.label == "Adobe custom user groups"][0]
+    ms.set_value([ms.options[0]]).run(timeout=30)
+    [b for b in at.button if b.label == "Add selected groups"][0].click().run(timeout=30)
+    assert not at.exception
+    assert at.session_state["selected_groups"]
     assert not [b for b in at.button if b.label == "Build preview"][0].disabled
+
+
+def test_template_favorite_and_custom_group_all_combine_into_one_selection(temp_db):
+    """Reported bug: applying a template showed its groups in a table, but
+    Build preview stayed disabled/stuck — because the custom group picker's
+    multiselect was itself the single source of truth for selected_groups,
+    overwritten on every render regardless of what Apply template or Add
+    favorites had just set. Template, favorites, and the custom picker must
+    all be pure *add* actions into one authoritative list, each provably
+    surviving the others, with Build preview reflecting the union."""
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=30)
+    _sync_groups(at)  # AEM-DEV-DEVELOPERS, AEM-PROD-AUTHORS, AEP-DATA-ENGINEERS, CJA-ANALYSTS
+    database.replace_favorite_groups("local.user@example.com", ["AEP-DATA-ENGINEERS"])
+    template_id = database.create_template_record("test", "", "CJA", ["CJA-ANALYSTS"], "actor@example.com")
+
+    _goto(at, "Provision access")
+    at.text_area[0].set_value("someone.tester@example.com").run(timeout=30)
+    [b for b in at.button if b.label == "Validate and continue"][0].click().run(timeout=30)
+    [b for b in at.button if b.label == "Continue to access"][0].click().run(timeout=30)
+
+    # 1. Apply template — only this in play so far.
+    [w for w in at.selectbox if w.key == "provision_template_id"][0].set_value(template_id).run(timeout=30)
+    [b for b in at.button if b.label == "Apply template"][0].click().run(timeout=30)
+    assert not at.exception
+    assert at.session_state["selected_groups"] == ["CJA-ANALYSTS"]
+    assert not [b for b in at.button if b.label == "Build preview"][0].disabled, (
+        "template groups alone must already enable Build preview"
+    )
+
+    # 2. Add a favorite on top — must not lose the template's group.
+    [w for w in at.multiselect if w.label == "Quick add favorites"][0].set_value(["AEP-DATA-ENGINEERS"]).run(timeout=30)
+    [b for b in at.button if b.label == "Add selected favorites"][0].click().run(timeout=30)
+    assert not at.exception
+    assert set(at.session_state["selected_groups"]) == {"CJA-ANALYSTS", "AEP-DATA-ENGINEERS"}
+
+    # 3. Add a custom group via search on top — must not lose the other two.
+    ms = [w for w in at.multiselect if w.label == "Adobe custom user groups"][0]
+    remaining_option = [o for o in ms.options if "AEM-PROD-AUTHORS" in o][0]
+    ms.set_value([remaining_option]).run(timeout=30)
+    [b for b in at.button if b.label == "Add selected groups"][0].click().run(timeout=30)
+    assert not at.exception
+    assert set(at.session_state["selected_groups"]) == {"CJA-ANALYSTS", "AEP-DATA-ENGINEERS", "AEM-PROD-AUTHORS"}
+    assert not [b for b in at.button if b.label == "Build preview"][0].disabled
+
+    # The "Selected groups" table (the actual source of truth) must list all
+    # three, each with its own Remove button.
+    for name in ["CJA-ANALYSTS", "AEP-DATA-ENGINEERS", "AEM-PROD-AUTHORS"]:
+        assert [b for b in at.button if b.key == f"remove_selected_group_{name}"], (
+            f"expected a Remove row for {name} in the Selected groups table"
+        )
+
+    # Build preview must actually succeed end-to-end from here.
+    [b for b in at.button if b.label == "Build preview"][0].click().run(timeout=30)
+    assert not at.exception
+    assert at.session_state["provision_step"] == 4
+
+
+def test_removing_a_selected_group_takes_it_out_of_the_selection(temp_db):
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=30)
+    _sync_groups(at)
+
+    _goto(at, "Provision access")
+    at.text_area[0].set_value("someone.tester@example.com").run(timeout=30)
+    [b for b in at.button if b.label == "Validate and continue"][0].click().run(timeout=30)
+    [b for b in at.button if b.label == "Continue to access"][0].click().run(timeout=30)
+
+    ms = [w for w in at.multiselect if w.label == "Adobe custom user groups"][0]
+    ms.set_value([ms.options[0], ms.options[1]]).run(timeout=30)
+    [b for b in at.button if b.label == "Add selected groups"][0].click().run(timeout=30)
+    assert len(at.session_state["selected_groups"]) == 2
+
+    to_remove = at.session_state["selected_groups"][0]
+    [b for b in at.button if b.key == f"remove_selected_group_{to_remove}"][0].click().run(timeout=30)
+    assert not at.exception
+    assert to_remove not in at.session_state["selected_groups"]
+    assert len(at.session_state["selected_groups"]) == 1
 
 
 def test_add_selected_favorites_is_disabled_until_something_is_picked(temp_db):
