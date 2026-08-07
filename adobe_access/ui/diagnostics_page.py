@@ -85,7 +85,7 @@ def render() -> None:
     log_lines = diagnostics.log_tail(500).splitlines()
     if log_lines:
         with st.expander("Recent log lines (last 200)"):
-            st.code("\n".join(log_lines[-200:]))
+            st.code("\n".join(log_lines[-200:]), height=350)
     else:
         st.caption("No log file yet — one is created the first time an action is recorded.")
     st.download_button(

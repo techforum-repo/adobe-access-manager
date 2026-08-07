@@ -69,19 +69,20 @@ def render() -> None:
         if recent.empty:
             st.info("No provisioning previews have been saved yet.")
         else:
-            for _, item in recent.iterrows():
-                cols = st.columns([3, 2, 1, 1])
-                # Template names are user-controlled free text (set on the Templates
-                # page) — never interpolate them into unsafe_allow_html markdown.
-                # Plain st.markdown()/st.caption() auto-escape instead of rendering HTML.
-                label = item.get("template_name") or "Manual groups"
-                cols[0].markdown(f"**{label}**")
-                cols[0].caption(f"{item['user_count']} users · {item['group_count']} groups")
-                cols[1].caption(f"{item['created_at']} · {item['status']}")
-                cols[2].metric("To add", int(item.get("summary_assignments", 0) or 0))
-                if cols[3].button("Reuse", key=f"reuse_request_{int(item['id'])}"):
-                    reuse_request(int(item["id"]))
-                    st.rerun()
+            with st.container(height=280):
+                for _, item in recent.iterrows():
+                    cols = st.columns([3, 2, 1, 1])
+                    # Template names are user-controlled free text (set on the Templates
+                    # page) — never interpolate them into unsafe_allow_html markdown.
+                    # Plain st.markdown()/st.caption() auto-escape instead of rendering HTML.
+                    label = item.get("template_name") or "Manual groups"
+                    cols[0].markdown(f"**{label}**")
+                    cols[0].caption(f"{item['user_count']} users · {item['group_count']} groups")
+                    cols[1].caption(f"{item['created_at']} · {item['status']}")
+                    cols[2].metric("To add", int(item.get("summary_assignments", 0) or 0))
+                    if cols[3].button("Reuse", key=f"reuse_request_{int(item['id'])}"):
+                        reuse_request(int(item["id"]))
+                        st.rerun()
             if st.button("View all request history"):
                 st.session_state.pending_navigation = "Request history"
                 st.rerun()
@@ -91,7 +92,7 @@ def render() -> None:
         if audit.empty:
             st.info("No activity has been recorded yet.")
         else:
-            st.dataframe(audit[["created_at", "actor", "action", "email", "status"]], width='stretch', hide_index=True)
+            st.dataframe(audit[["created_at", "actor", "action", "email", "status"]], width='stretch', hide_index=True, height=280)
 
     with right:
         st.markdown("##### Favorite groups")
@@ -101,8 +102,9 @@ def render() -> None:
         else:
             catalog = group_catalog()
             labels = catalog.set_index("adobe_group_name")["display_name"].to_dict() if not catalog.empty else {}
-            for name in favorites:
-                st.markdown(f"⭐ {labels.get(name, name)}")
+            with st.container(height=280):
+                for name in favorites:
+                    st.markdown(f"⭐ {labels.get(name, name)}")
 
         st.markdown("##### Most used templates")
         top_templates = most_used_templates(5)
