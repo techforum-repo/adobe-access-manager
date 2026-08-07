@@ -1,5 +1,11 @@
 from adobe_access.client import is_user_group
-from adobe_access.utils import derive_name, describe_special_permission, is_special_permission, validate_email
+from adobe_access.utils import (
+    classify_special_permission,
+    derive_name,
+    describe_special_permission,
+    is_special_permission,
+    validate_email,
+)
 
 
 def test_name_derivation():
@@ -101,6 +107,45 @@ def test_product_and_profile_admin_stay_distinct_from_the_generic_admin_catch_al
     Administrator bucket."""
     assert describe_special_permission("_product_admin_target") == "Product Administrator (target)"
     assert describe_special_permission("_profile_admin_default") == "Profile Administrator (default)"
+
+
+def test_product_admin_detail_drops_the_redundant_slug_repeat_and_env_suffix():
+    """Real example: Adobe product profile names repeat the readable profile
+    name as a lowercase slug immediately after itself, then tack on a
+    technical environment/instance suffix — keep just the product and the
+    readable profile name."""
+    raw = (
+        "Product Administrator - Adobe Experience Manager as a Cloud Service - "
+        "BSC Enterprise Web Platform-bsc-enterprise-web-platform-therasphere-val-publish"
+    )
+    result = classify_special_permission(raw)
+    assert result.category == "Product Administrator"
+    assert result.detail == "Adobe Experience Manager as a Cloud Service - BSC Enterprise Web Platform"
+
+
+def test_product_admin_detail_without_a_redundant_slug_is_left_unchanged():
+    """No self-repeat present — must not truncate or otherwise mangle it."""
+    assert describe_special_permission("Product Administrator - Adobe Target") == "Product Administrator (Adobe Target)"
+
+
+def test_slug_dedup_only_applies_within_the_profile_segment_not_the_product_name():
+    """The product-name portion (before the last " - ") must never be searched
+    for a self-repeat — only the profile-name segment after it can have one."""
+    raw = "Product Administrator - Customer Journey Analytics - Reporting Profile-reporting-profile-prod"
+    result = classify_special_permission(raw)
+    assert result.detail == "Customer Journey Analytics - Reporting Profile"
+
+
+def test_user_group_administrator_stays_separate_from_the_generic_admin_catch_all():
+    """Regression: an exact-only, single-word-order pattern meant any suffixed
+    or reordered raw name silently fell through to the generic "_admin"
+    catch-all and got merged into Profile Administrator instead of staying
+    its own category. Must be recognized regardless of word order or suffix."""
+    assert describe_special_permission("_user_group_admin") == "User Group Administrator"
+    assert describe_special_permission("_user_group_admin_default") == "User Group Administrator (default)"
+    assert describe_special_permission("_admin_user_group") == "User Group Administrator"
+    assert describe_special_permission("_admin_user_group_default") == "User Group Administrator (default)"
+    assert describe_special_permission("User Group Administrator") == "User Group Administrator"
 
 
 def test_describe_special_permission_uses_known_friendly_labels():

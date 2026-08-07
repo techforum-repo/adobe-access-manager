@@ -134,18 +134,24 @@ _SPECIAL_PERMISSION_EXACT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^_?org[_ ]?admin$", re.I), "System Administrator"),
     (re.compile(r"^_?support[_ ]?admin$", re.I), "Support Administrator"),
     (re.compile(r"^_?deployment[_ ]?admin$", re.I), "Deployment Administrator"),
-    (re.compile(r"^_?user[_ ]?group[_ ]?admin$", re.I), "User Group Administrator"),
     (re.compile(r"^_?licens\w*[_ ]?admin$", re.I), "License Administrator"),
     (re.compile(r"^_?storage[_ ]?admin$", re.I), "Storage Administrator"),
 ]
 _SPECIAL_PERMISSION_PREFIX_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^(_product[_ ]?admin(istrator)?|Product Administrator)", re.I), "Product Administrator"),
     (re.compile(r"^(_profile[_ ]?admin(istrator)?|Profile Administrator)", re.I), "Profile Administrator"),
+    # Checked before the generic "_admin" catch-all below, and matches either
+    # word order ("_user_group_admin..." or "_admin_user_group...") since it's
+    # unconfirmed which one this tenant actually returns — previously an
+    # exact-only, single-order pattern, so any suffixed or reordered variant
+    # fell through to the generic catch-all and got merged into Profile
+    # Administrator instead of staying separate.
+    (re.compile(r"^(_user[_ ]?group[_ ]?admin(istrator)?|_admin[_ ]?user[_ ]?group|User Group Administrator)", re.I), "User Group Administrator"),
     # "_developer..." always groups as Developer, whatever follows.
     (re.compile(r"^_developer", re.I), "Developer"),
     # Confirmed against real tenant data: an unqualified "_admin..." — no
-    # "product"/"profile" immediately after the underscore, so this doesn't
-    # overlap with the two patterns above — is this tenant's Profile
+    # "product"/"profile"/"user group" immediately after the underscore, so
+    # this doesn't overlap with the patterns above — is this tenant's Profile
     # Administrator. Underscore-required, unlike the Product/Profile patterns
     # above — bare "Admin" without it is too generic to safely catch (see the
     # false-positive note in the module docstring), and no bare "Admin..."
@@ -164,6 +170,43 @@ def is_special_permission(name: str) -> bool:
     return classify_special_permission(raw).recognized
 
 
+_PRODUCT_PROFILE_ADMIN_CATEGORIES = {"Product Administrator", "Profile Administrator"}
+
+
+def _drop_redundant_slug_suffix(detail: str) -> str:
+    """Adobe product profile names tend to repeat the readable profile name
+    immediately after itself as a lowercase, hyphenated slug, then tack on a
+    technical environment/instance suffix — e.g. "Adobe Experience Manager as
+    a Cloud Service - BSC Enterprise Web Platform-bsc-enterprise-web-platform-
+    therasphere-val-publish". A product name and a profile name are joined by
+    " - " (spaces around the hyphen); the redundant slug repeat only ever
+    shows up within the profile-name segment, glued on with a bare "-" (no
+    spaces) — so only that last " - "-delimited segment is searched for a
+    self-repeat, never the product name itself.
+    """
+    if " - " in detail:
+        head, _, tail = detail.rpartition(" - ")
+        return f"{head} - {_dedupe_slug_repeat(tail)}"
+    return _dedupe_slug_repeat(detail)
+
+
+def _dedupe_slug_repeat(segment: str) -> str:
+    """Within one name segment, find where a leading portion's slugified form
+    (lowercase, non-alphanumerics collapsed to hyphens) reappears verbatim
+    right after it, and cut there. Returned as-is if no such repeat is found."""
+    search_from = 0
+    while True:
+        hyphen_pos = segment.find("-", search_from)
+        if hyphen_pos == -1:
+            return segment
+        candidate_name = segment[:hyphen_pos]
+        candidate_slug = re.sub(r"[^a-z0-9]+", "-", candidate_name.lower()).strip("-")
+        remainder = segment[hyphen_pos + 1:]
+        if candidate_slug and (remainder == candidate_slug or remainder.startswith(candidate_slug + "-")):
+            return candidate_name
+        search_from = hyphen_pos + 1
+
+
 def classify_special_permission(name: str) -> SpecialPermission:
     """Best-effort classification. Falls back to the raw Adobe name as its own
     `category` (`recognized=False`) for anything unrecognized, rather than
@@ -177,6 +220,8 @@ def classify_special_permission(name: str) -> SpecialPermission:
         if match:
             remainder = raw[match.end():]
             detail = remainder.strip(" _-:()").replace("_", " ").strip()
+            if category in _PRODUCT_PROFILE_ADMIN_CATEGORIES:
+                detail = _drop_redundant_slug_suffix(detail)
             return SpecialPermission(category=category, detail=detail, raw=raw, recognized=True)
     return SpecialPermission(category=raw, detail="", raw=raw, recognized=False)
 
