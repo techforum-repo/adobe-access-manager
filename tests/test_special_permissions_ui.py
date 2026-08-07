@@ -29,7 +29,7 @@ def _seed_mock_users():
     provisioning.client.users["admin.user@example.com"] = {
         "email": "admin.user@example.com", "first_name": "Admin", "last_name": "User",
         "identity_type": "federatedID", "status": "active",
-        "groups": {"AEM-PROD-AUTHORS", "_org_admin"},
+        "groups": {"AEM-PROD-AUTHORS", "_org_admin", "_product_admin_target", "_product_admin_aem"},
     }
     provisioning.client.users["plain.user@example.com"] = {
         "email": "plain.user@example.com", "first_name": "Plain", "last_name": "User",
@@ -54,9 +54,15 @@ def test_user_search_shows_special_permissions_for_an_admin(temp_db):
     assert not at.exception
 
     assert any("Special permissions" in m.value for m in at.markdown)
-    tables = [df.value for df in at.dataframe if "Role" in getattr(df.value, "columns", [])]
-    assert tables, "expected a Special permissions table"
-    assert "System Administrator" in tables[0]["Role"].tolist()
+    # System Administrator (single, no detail) renders as a flat flag line.
+    assert any("System Administrator" in m.value for m in at.markdown)
+    # Product Administrator (two entries) renders as a counted expander,
+    # each product listed as its own line.
+    expanders = [e for e in at.expander if e.label.startswith("Product Administrator")]
+    assert expanders, "expected a Product Administrator expander"
+    assert "(2)" in expanders[0].label
+    assert any("target" in m.value for m in at.markdown)
+    assert any("aem" in m.value for m in at.markdown)
 
 
 def test_user_search_shows_no_special_permissions_section_for_a_plain_user(temp_db):
@@ -81,8 +87,15 @@ def test_compare_users_shows_special_permissions_comparison(temp_db):
     [b for b in at.button if b.label == "Compare users"][0].click().run(timeout=30)
     assert not at.exception
 
+    # Each user's own "Administrative rights" card (System Administrator flag
+    # line, Product Administrator expander) renders once per side.
+    assert any("System Administrator" in m.value for m in at.markdown)
+    expanders = [e for e in at.expander if e.label.startswith("Product Administrator")]
+    assert expanders and "(2)" in expanders[0].label
+
+    # Plus the side-by-side diff table.
     assert any("Special permissions" in m.value for m in at.markdown)
     tables = [df.value for df in at.dataframe if "Role" in getattr(df.value, "columns", [])]
     assert tables, "expected a Special permissions comparison table"
-    assert tables[0].iloc[0]["Role"] == "System Administrator"
-    assert tables[0].iloc[0]["Result"] == "Only first user"
+    row = tables[0][tables[0]["Role"] == "System Administrator"].iloc[0]
+    assert row["Result"] == "Only first user"

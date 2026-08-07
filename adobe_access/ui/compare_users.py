@@ -4,7 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from adobe_access.database import record
-from adobe_access.ui.shared import render_friendly_error
+from adobe_access.ui.shared import render_friendly_error, render_special_permissions
 from adobe_access.users import (
     UserLookupError,
     compare_custom_group_memberships,
@@ -68,20 +68,24 @@ def render() -> None:
             lm1, lm2 = st.columns(2)
             lm1.metric("Custom groups", len(membership_table(left_user)))
             lm2.metric("Special permissions", len(left_special))
+            render_special_permissions(left_special, key_prefix="compare_left")
         with l2:
             st.markdown(f"### {right_user.get('display_name') or right_user.get('email')}")
             st.caption(right_user.get("email", ""))
             rm1, rm2 = st.columns(2)
             rm1.metric("Custom groups", len(membership_table(right_user)))
             rm2.metric("Special permissions", len(right_special))
+            render_special_permissions(right_special, key_prefix="compare_right")
 
         special_comparison = compare_special_permissions(left_user, right_user)
         if not special_comparison.empty:
-            st.markdown("###### ⚠️ Special permissions")
+            st.markdown("###### ⚠️ Special permissions — side-by-side")
             st.caption("Org-level administrative roles — read live from Adobe, not the synced custom-group cache.")
+            display_special = special_comparison.copy()
+            display_special["detail"] = display_special["detail"].where(display_special["detail"] != "", display_special["raw"])
             st.dataframe(
-                special_comparison.rename(columns={
-                    "role": "Role", "adobe_group_name": "Adobe name",
+                display_special.drop(columns=["raw"]).rename(columns={
+                    "category": "Role", "detail": "Product / detail",
                     "left_member": left_user.get("email", "First user"),
                     "right_member": right_user.get("email", "Second user"),
                     "comparison": "Result",

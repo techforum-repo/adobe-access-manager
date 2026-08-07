@@ -61,6 +61,24 @@ def test_is_special_permission_detects_the_underscore_prefix():
     assert not is_special_permission("BSC-CJA-USERS")
 
 
+def test_is_special_permission_also_detects_human_readable_role_phrases():
+    """Confirmed against real tenant data — the same role type isn't always
+    returned with the underscore-prefixed slug."""
+    assert is_special_permission("Product Administrator")
+    assert is_special_permission("Product Administrator - Adobe Target")
+    assert is_special_permission("Profile Administrator - Target Default")
+    assert is_special_permission("_developer")
+
+
+def test_is_special_permission_does_not_misfire_on_a_real_custom_group():
+    """A non-underscore-prefixed name must match the FULL word "Administrator",
+    not bare "Admin" — otherwise a real custom group like "Product Admin
+    Access Group" would be wrongly excluded from the custom-group cache and
+    miscategorized as an Adobe admin role."""
+    assert not is_special_permission("Product Admin Access Group")
+    assert not is_special_permission("Product Administration Team")
+
+
 def test_describe_special_permission_uses_known_friendly_labels():
     assert describe_special_permission("_org_admin") == "System Administrator"
     assert describe_special_permission("_support_admin") == "Support Administrator"
@@ -68,8 +86,12 @@ def test_describe_special_permission_uses_known_friendly_labels():
 
 
 def test_describe_special_permission_handles_product_admin_with_a_dynamic_suffix():
-    assert describe_special_permission("_admin_12345abc") == "Product Administrator (12345abc)"
-    assert describe_special_permission("_admin_") == "Product Administrator"
+    """Confirmed against real tenant data: the raw name isn't a single fixed
+    string — observed both an underscore slug and a human-readable phrase."""
+    assert describe_special_permission("_product_admin_target") == "Product Administrator (target)"
+    assert describe_special_permission("_product_admin") == "Product Administrator"
+    assert describe_special_permission("Product Administrator - Adobe Target") == "Product Administrator (Adobe Target)"
+    assert describe_special_permission("Product Administrator") == "Product Administrator"
 
 
 def test_describe_special_permission_falls_back_to_the_raw_name_when_unknown():

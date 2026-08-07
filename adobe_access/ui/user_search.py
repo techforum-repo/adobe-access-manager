@@ -6,7 +6,7 @@ import streamlit as st
 from adobe_access.client import client
 from adobe_access.database import record, replace_managed_users, user_catalog_status
 from adobe_access.provisioning import build_user_table, run
-from adobe_access.ui.shared import render_friendly_error
+from adobe_access.ui.shared import render_friendly_error, render_special_permissions
 from adobe_access.users import (
     UserLookupError,
     browse_cached_users,
@@ -156,13 +156,7 @@ def _render_user_detail(user: dict, *, key_prefix: str) -> None:
     if ignored:
         st.caption(f"{ignored} other Adobe membership(s) not shown — not in the synced custom-group cache.")
 
-    if not special.empty:
-        st.markdown("###### ⚠️ Special permissions")
-        st.caption("Org-level administrative roles — read live from Adobe, not the synced custom-group cache.")
-        st.dataframe(
-            special.rename(columns={"role": "Role", "adobe_group_name": "Adobe name"}),
-            width='stretch', hide_index=True,
-        )
+    render_special_permissions(special, key_prefix=key_prefix)
 
     if memberships.empty:
         st.info("This user has no memberships in the locally synchronized Adobe custom user groups.")

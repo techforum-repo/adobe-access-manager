@@ -96,42 +96,87 @@ def is_privileged(name: str) -> bool:
 
 
 # Adobe represents org-level administrative roles — System Administrator,
-# Product Administrator (per product profile), Support Administrator, ... —
-# as specially-named entries in a user's own `groups` list, distinct from the
-# custom user groups this app provisions. They never pass client.is_user_group()'s
-# filter on the groups-listing endpoint, so without this they'd silently vanish
-# into membership_table()'s generic "ignored" count. Known ones are labeled;
-# anything else matching Adobe's reserved-name convention still gets surfaced
-# under its raw name rather than guessed at or dropped.
-_SPECIAL_PERMISSION_LABELS = {
-    "_org_admin": "System Administrator",
-    "_deployment_admin": "Deployment Administrator",
-    "_support_admin": "Support Administrator",
-    "_user_group_admin": "User Group Administrator",
-    "_licensing_admin": "License Administrator",
-    "_storage_admin": "Storage Administrator",
-}
-_PRODUCT_ADMIN_PREFIX = "_admin_"
+# Product Administrator (per product), Profile Administrator (per product
+# profile, a finer-grained level than Product Administrator), Support
+# Administrator, ... — as specially-named entries in a user's own `groups`
+# list, distinct from the custom user groups this app provisions. They never
+# pass client.is_user_group()'s filter on the groups-listing endpoint, so
+# without this they'd silently vanish into membership_table()'s generic
+# "ignored" count.
+#
+# Confirmed against real tenant data that the raw string Adobe returns for
+# the same role type is NOT consistent — observed variants include an
+# underscore-prefixed slug (`_product_admin`, `_developer`) and a
+# human-readable phrase ("Product Administrator ..."). Matched by a
+# case-insensitive prefix pattern on the "core" role phrase rather than an
+# exact string, precisely because of that variability. The underscore-slug
+# form only requires the short "admin" (the leading underscore is itself
+# Adobe's reserved-name marker, a strong enough signal on its own); the
+# non-underscore form requires the full word "Administrator" specifically —
+# bare "Admin" without underscore is too generic and risks misfiring on a
+# real custom group whose name happens to start with it (e.g. "Product Admin
+# Access Group").
+#
+# Product/Profile Administrator apply per product or per product profile —
+# whatever text remains after stripping the matched role phrase and its
+# separators (underscore, hyphen, colon, parentheses) is kept as `detail`
+# (e.g. the product name, "Target") so multiple entries of the same category
+# can be grouped together instead of each showing as an opaque one-off.
+@dataclass(frozen=True)
+class SpecialPermission:
+    category: str  # e.g. "Product Administrator", or the raw name if unrecognized
+    detail: str  # e.g. "Target" — empty for org-wide roles with no per-item detail
+    raw: str  # the original Adobe name, always preserved for verification
+    recognized: bool  # matched a known role pattern, vs. falling back to the raw name
+
+
+_SPECIAL_PERMISSION_EXACT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"^_?org[_ ]?admin$", re.I), "System Administrator"),
+    (re.compile(r"^_?support[_ ]?admin$", re.I), "Support Administrator"),
+    (re.compile(r"^_?deployment[_ ]?admin$", re.I), "Deployment Administrator"),
+    (re.compile(r"^_?user[_ ]?group[_ ]?admin$", re.I), "User Group Administrator"),
+    (re.compile(r"^_?licens\w*[_ ]?admin$", re.I), "License Administrator"),
+    (re.compile(r"^_?storage[_ ]?admin$", re.I), "Storage Administrator"),
+    (re.compile(r"^_?developer$", re.I), "Developer"),
+]
+_SPECIAL_PERMISSION_PREFIX_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"^(_product[_ ]?admin(istrator)?|Product Administrator)", re.I), "Product Administrator"),
+    (re.compile(r"^(_profile[_ ]?admin(istrator)?|Profile Administrator)", re.I), "Profile Administrator"),
+]
 
 
 def is_special_permission(name: str) -> bool:
-    """True for an Adobe-reserved administrative-role name (leading underscore),
-    as opposed to an ordinary custom user group."""
-    return str(name).strip().startswith("_")
+    """True for an Adobe administrative-role entry, as opposed to an ordinary
+    custom user group — either Adobe's own reserved-name convention (leading
+    underscore) or a recognized role phrase (see module docstring above)."""
+    raw = str(name).strip()
+    if raw.startswith("_"):
+        return True
+    return classify_special_permission(raw).recognized
+
+
+def classify_special_permission(name: str) -> SpecialPermission:
+    """Best-effort classification. Falls back to the raw Adobe name as its own
+    `category` (`recognized=False`) for anything unrecognized, rather than
+    guessing — still visible, just not grouped under a friendly label."""
+    raw = str(name).strip()
+    for pattern, category in _SPECIAL_PERMISSION_EXACT_PATTERNS:
+        if pattern.match(raw):
+            return SpecialPermission(category=category, detail="", raw=raw, recognized=True)
+    for pattern, category in _SPECIAL_PERMISSION_PREFIX_PATTERNS:
+        match = pattern.match(raw)
+        if match:
+            remainder = raw[match.end():]
+            detail = remainder.strip(" _-:()").replace("_", " ").strip()
+            return SpecialPermission(category=category, detail=detail, raw=raw, recognized=True)
+    return SpecialPermission(category=raw, detail="", raw=raw, recognized=False)
 
 
 def describe_special_permission(name: str) -> str:
-    """Best-effort friendly label. Product Administrator names carry a product
-    profile ID with no single fixed string, so that case is pattern-matched;
-    anything else unrecognized falls back to the raw Adobe name rather than a
-    guessed label."""
-    clean = str(name).strip()
-    if clean in _SPECIAL_PERMISSION_LABELS:
-        return _SPECIAL_PERMISSION_LABELS[clean]
-    if clean.startswith(_PRODUCT_ADMIN_PREFIX):
-        suffix = clean[len(_PRODUCT_ADMIN_PREFIX):]
-        return f"Product Administrator ({suffix})" if suffix else "Product Administrator"
-    return clean
+    """Single-line friendly label — classify_special_permission()'s category
+    plus its detail in parentheses, if any."""
+    result = classify_special_permission(name)
+    return f"{result.category} ({result.detail})" if result.detail else result.category
 
 
 def sanitize_csv_cell(value: Any) -> Any:
