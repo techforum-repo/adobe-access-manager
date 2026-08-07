@@ -8,7 +8,7 @@ import pandas as pd
 from .client import client
 from .database import read_managed_groups, read_managed_users
 from .provisioning import run
-from .utils import describe_special_permission, is_special_permission
+from .utils import classify_special_permission, is_special_permission
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -116,16 +116,25 @@ def special_permissions(user: dict[str, Any]) -> pd.DataFrame:
     """Org-level administrative roles this user holds (System Administrator,
     Product Administrator, Support Administrator, ...) — read directly from
     the user's raw Adobe `groups`, not the synced custom-group cache (these
-    are never part of it, see client.is_user_group())."""
+    are never part of it, see client.is_user_group()).
+
+    One row per role instance — a user with Product Administrator on three
+    products gets three rows, same `category` ("Product Administrator"),
+    different `detail` (the product name). Group by `category` to reproduce
+    the Admin Console's "PRODUCT ADMINISTRATOR (3)" style count.
+    """
     names = sorted(
         {str(g) for g in (user.get("groups") or set()) if is_special_permission(str(g))},
         key=str.casefold,
     )
+    columns = ["category", "detail", "raw"]
     if not names:
-        return pd.DataFrame(columns=["role", "adobe_group_name"])
-    return pd.DataFrame(
-        [{"role": describe_special_permission(name), "adobe_group_name": name} for name in names]
-    )
+        return pd.DataFrame(columns=columns)
+    rows = [
+        {"category": item.category, "detail": item.detail, "raw": item.raw}
+        for item in (classify_special_permission(name) for name in names)
+    ]
+    return pd.DataFrame(rows, columns=columns)
 
 
 def membership_table(user: dict[str, Any], managed_groups: pd.DataFrame | None = None) -> pd.DataFrame:
@@ -272,8 +281,9 @@ def compare_special_permissions(left_user: dict[str, Any], right_user: dict[str,
     Administrator, ...) between two users — same "Shared/Only first/Only
     second" shape as compare_custom_group_memberships(), but sourced from
     each user's raw `groups` directly rather than the custom-group cache,
-    since these roles are never part of it."""
-    columns = ["role", "adobe_group_name", "left_member", "right_member", "comparison"]
+    since these roles are never part of it. One row per role instance, same
+    category/detail/raw shape as special_permissions()."""
+    columns = ["category", "detail", "raw", "left_member", "right_member", "comparison"]
     left_names = {str(g) for g in (left_user.get("groups") or set()) if is_special_permission(str(g))}
     right_names = {str(g) for g in (right_user.get("groups") or set()) if is_special_permission(str(g))}
     all_names = left_names | right_names
@@ -285,15 +295,17 @@ def compare_special_permissions(left_user: dict[str, Any], right_user: dict[str,
         left_member = name in left_names
         right_member = name in right_names
         comparison = "Shared" if left_member and right_member else ("Only first user" if left_member else "Only second user")
+        item = classify_special_permission(name)
         rows.append({
-            "role": describe_special_permission(name),
-            "adobe_group_name": name,
+            "category": item.category,
+            "detail": item.detail,
+            "raw": name,
             "left_member": left_member,
             "right_member": right_member,
             "comparison": comparison,
         })
     return pd.DataFrame(rows, columns=columns).sort_values(
-        "role", key=lambda col: col.astype(str).str.casefold()
+        ["category", "detail"], key=lambda col: col.astype(str).str.casefold()
     ).reset_index(drop=True)
 
 

@@ -154,6 +154,31 @@ def render_friendly_error(exc: Exception, *, key: str, context: str = "") -> boo
     return False
 
 
+def render_special_permissions(special: pd.DataFrame, *, key_prefix: str) -> None:
+    """Admin Console style: a single-instance role (System Administrator,
+    Support Administrator, ...) shows as a flag line; a role that can apply
+    per product/profile (Product Administrator, Profile Administrator) shows
+    as an expander with a count, one line per product/profile — matching
+    Adobe's own "PRODUCT ADMINISTRATOR (35)" presentation.
+
+    `key_prefix` must be unique per call site — this renders twice on the
+    same page in Compare users (once per user), and two users both holding
+    "Product Administrator" would otherwise collide on the same expander key.
+    """
+    if special.empty:
+        return
+    st.markdown("###### ⚠️ Special permissions")
+    st.caption("Org-level administrative roles — read live from Adobe, not the synced custom-group cache.")
+    for category, group in special.groupby("category", sort=True):
+        if len(group) == 1 and not str(group.iloc[0]["detail"]).strip():
+            st.write(f"**{category}**")
+            continue
+        with st.expander(f"{category} ({len(group)})", key=f"{key_prefix}_special_{category}"):
+            items = group.sort_values("detail", key=lambda c: c.astype(str).str.casefold())
+            for _, row in items.iterrows():
+                st.write(f"- {row['detail'] or row['raw']}")
+
+
 def group_catalog() -> pd.DataFrame:
     return read_managed_groups()
 

@@ -212,13 +212,19 @@ corporate proxy is slow).
   action (mirrors how User groups syncs, fetching every page Adobe has, no cap).
   Each cached user's custom-group count is computed against the *current* group cache,
   so it stays accurate even without re-syncing users after a group sync. A user's
-  **Special permissions** (System Administrator, Product Administrator, Support
-  Administrator, ...) are shown in their own section — Adobe represents these as
-  underscore-prefixed entries in the user's own `groups`, never part of the synced
-  custom-group cache, so they'd otherwise silently disappear into the generic "N other
-  memberships not shown" count.
-- **Compare users** — also compares each user's Special permissions side by side
-  (Shared / Only first user / Only second user), same idea as the custom-group diff.
+  **Special permissions** are shown in their own section, Admin Console style: System
+  Administrator/Support Administrator/... as flat flag lines, Product Administrator and
+  Profile Administrator as an expandable, counted list (one line per product/profile,
+  e.g. "Product Administrator (3)" → Target, CJA, AEM). These are never part of the
+  synced custom-group cache — without this they'd silently disappear into the generic
+  "N other memberships not shown" count. Adobe doesn't return a single consistent raw
+  string for the same role type (observed both `_product_admin`-style slugs and
+  human-readable "Product Administrator ..." phrases), so detection matches on the role
+  phrase itself rather than one fixed format — see `adobe_access/utils.py`'s
+  `classify_special_permission()` if your tenant returns something not yet recognized.
+- **Compare users** — each user gets their own Special permissions card, plus a
+  side-by-side diff (Shared / Only first user / Only second user), same idea as the
+  custom-group diff.
 - **Templates**, **User groups** — as before.
 - **Copy access** — copy a source user's synchronized custom user groups to one or more
   targets. Build a preview first (a live Adobe lookup per target, no changes yet); any
