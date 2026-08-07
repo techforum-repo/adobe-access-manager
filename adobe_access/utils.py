@@ -174,6 +174,24 @@ _SPECIAL_PERMISSION_PREFIX_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 # See the module docstring above — genuinely ambiguous by Adobe's own design,
 # resolved in classify_special_permission() via known_group_names, not here.
 _GENERIC_ADMIN_PATTERN = re.compile(r"^_admin", re.I)
+_MATCH_KEY_SEPARATORS_RE = re.compile(r"[\s_-]+")
+
+
+def normalize_group_match_key(value: str) -> str:
+    """Casefold and collapse spaces/underscores/hyphens so a group name
+    compares equal regardless of which separator either side happens to use.
+
+    Adobe's raw "_admin_<name>" slug substitutes underscores for spaces in
+    the group name (e.g. a group named "Sample User Group" becomes
+    "_admin_Sample_User_Group") — but the synced group cache stores the name
+    however Adobe's Groups API itself returned it, which is not guaranteed to
+    use spaces either. A one-directional underscore-to-space replacement on
+    just one side of the comparison silently breaks the moment the two sides
+    disagree about which separator is "the real one" — collapsing both sides
+    to the same separator-free key sidesteps the question entirely. This is
+    only ever used for matching, never for anything shown to the user.
+    """
+    return _MATCH_KEY_SEPARATORS_RE.sub("", str(value).casefold())
 
 
 def is_special_permission(name: str) -> bool:
@@ -228,8 +246,8 @@ def classify_special_permission(name: str, *, known_group_names: set[str] | None
     `category` (`recognized=False`) for anything unrecognized, rather than
     guessing — still visible, just not grouped under a friendly label.
 
-    `known_group_names` — a case-insensitively-normalized (casefolded) set of
-    currently-synced custom group names — disambiguates the generic
+    `known_group_names` — currently-synced custom group names, each already
+    run through `normalize_group_match_key()` — disambiguates the generic
     "_admin_<name>" case (see the module docstring above): if `<name>`
     matches a real synced group, it's User Group Administrator for that
     group; otherwise Profile Administrator. Omit it (the default) to always
@@ -253,7 +271,7 @@ def classify_special_permission(name: str, *, known_group_names: set[str] | None
         remainder = raw[generic_match.end():]
         detail = remainder.strip(" _-:()").replace("_", " ").strip()
         category = "Profile Administrator"
-        if known_group_names and detail.strip().casefold() in known_group_names:
+        if known_group_names and normalize_group_match_key(detail) in known_group_names:
             category = "User Group Administrator"
         return SpecialPermission(category=category, detail=detail, raw=raw, recognized=True)
     return SpecialPermission(category=raw, detail="", raw=raw, recognized=False)

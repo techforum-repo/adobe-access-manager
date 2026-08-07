@@ -8,7 +8,7 @@ import pandas as pd
 from .client import client
 from .database import read_managed_groups, read_managed_users
 from .provisioning import run
-from .utils import classify_special_permission, is_special_permission
+from .utils import classify_special_permission, is_special_permission, normalize_group_match_key
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -113,15 +113,22 @@ def get_cached_user(email: str) -> dict[str, Any] | None:
 
 
 def _known_group_names() -> set[str]:
-    """Casefolded names of every currently-synced custom user group — the
-    only data this app has to disambiguate Adobe's "_admin_<name>" (Profile
-    Administrator vs. User Group Administrator; see utils.py's module
-    docstring on classify_special_permission for why that's ambiguous by
-    Adobe's own design)."""
+    """Normalized (see utils.normalize_group_match_key) names of every
+    currently-synced custom user group — the only data this app has to
+    disambiguate Adobe's "_admin_<name>" (Profile Administrator vs. User
+    Group Administrator; see utils.py's module docstring on
+    classify_special_permission for why that's ambiguous by Adobe's own
+    design).
+
+    Normalizing here (rather than just casefolding) matters because a group
+    name can contain a space, and there's no guarantee which side —  the raw
+    "_admin_<name>" slug or this cached name — is the one using an underscore
+    in its place; collapsing both to the same separator-free key makes the
+    comparison agree either way."""
     cached = read_managed_groups()
     if cached.empty or "adobe_group_name" not in cached.columns:
         return set()
-    return {str(v).strip().casefold() for v in cached["adobe_group_name"] if str(v).strip()}
+    return {normalize_group_match_key(v) for v in cached["adobe_group_name"] if str(v).strip()}
 
 
 def special_permissions(user: dict[str, Any]) -> pd.DataFrame:
