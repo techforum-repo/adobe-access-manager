@@ -79,6 +79,30 @@ def test_is_special_permission_does_not_misfire_on_a_real_custom_group():
     assert not is_special_permission("Product Administration Team")
 
 
+def test_developer_prefix_groups_together_with_any_suffix():
+    """Confirmed against real tenant data: any "_developer..." name (not just
+    the bare "_developer") groups under the same Developer category."""
+    assert describe_special_permission("_developer") == "Developer"
+    assert describe_special_permission("_developer_12345") == "Developer (12345)"
+
+
+def test_unqualified_admin_prefix_groups_as_profile_administrator():
+    """Confirmed against real tenant data: in this tenant, "_admin..." with no
+    "product"/"profile" in the name is how Profile Administrator is
+    represented — distinct from the "_product_admin..." form."""
+    assert describe_special_permission("_admin") == "Profile Administrator"
+    assert describe_special_permission("_admin_default") == "Profile Administrator (default)"
+
+
+def test_product_and_profile_admin_stay_distinct_from_the_generic_admin_catch_all():
+    """"_product_admin..."/"_profile_admin..." don't literally start with
+    "_admin" (they start with "_product"/"_profile"), so the generic "_admin"
+    catch-all must never absorb them into an undifferentiated Profile
+    Administrator bucket."""
+    assert describe_special_permission("_product_admin_target") == "Product Administrator (target)"
+    assert describe_special_permission("_profile_admin_default") == "Profile Administrator (default)"
+
+
 def test_describe_special_permission_uses_known_friendly_labels():
     assert describe_special_permission("_org_admin") == "System Administrator"
     assert describe_special_permission("_support_admin") == "Support Administrator"
