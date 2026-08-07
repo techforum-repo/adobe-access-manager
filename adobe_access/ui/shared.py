@@ -168,22 +168,15 @@ def render_special_permissions(special: pd.DataFrame, *, key_prefix: str) -> Non
     if special.empty:
         return
     st.markdown("###### ⚠️ Special permissions")
-    st.caption(
-        "Org-level administrative roles — read live from Adobe, not the synced custom-group cache. "
-        "The Adobe name shown for each is the exact raw value Adobe returned — if a role looks "
-        "grouped or labeled wrong, that's the string to report."
-    )
+    st.caption("Org-level administrative roles — read live from Adobe, not the synced custom-group cache.")
     for category, group in special.groupby("category", sort=True):
         if len(group) == 1 and not str(group.iloc[0]["detail"]).strip():
-            row = group.iloc[0]
             st.write(f"**{category}**")
-            st.caption(f"Adobe name: `{row['raw']}`")
             continue
         with st.expander(f"{category} ({len(group)})", key=f"{key_prefix}_special_{category}"):
             items = group.sort_values("detail", key=lambda c: c.astype(str).str.casefold())
             for _, row in items.iterrows():
                 st.write(f"- {row['detail'] or row['raw']}")
-                st.caption(f"Adobe name: `{row['raw']}`")
 
 
 def group_catalog() -> pd.DataFrame:

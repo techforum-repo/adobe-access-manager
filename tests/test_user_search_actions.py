@@ -94,6 +94,39 @@ def test_special_permissions_admin_falls_back_to_profile_administrator_without_a
     assert result.iloc[0]["category"] == "Profile Administrator"
 
 
+def test_special_permissions_disambiguates_admin_when_the_group_name_has_a_space():
+    """Adobe's raw "_admin_<name>" slug substitutes an underscore for every
+    space in the group name (e.g. a group named "Sample User Group" becomes
+    "_admin_Sample_User_Group") — but the synced group cache stores the name
+    exactly as Adobe's Groups API returned it, which is not guaranteed to use
+    a space there either. Whichever side ends up using an underscore where
+    the other uses a space, the two must still be recognized as the same
+    group."""
+    database.replace_managed_groups([
+        # The cache's own copy of the name uses an underscore where the raw
+        # admin slug conceptually has a word-separator too — a real-world
+        # shape this app has actually seen from Adobe's Groups API.
+        {"name": "Sample_User_Group", "system": "Other"},
+    ])
+    user = {"groups": {
+        "_admin_Sample_User_Group",  # raw slug: underscore, cache: underscore
+    }}
+    result = special_permissions(user)
+    assert result.iloc[0]["category"] == "User Group Administrator"
+
+
+def test_special_permissions_disambiguates_admin_when_the_cache_name_has_a_space():
+    """The mirror image of the case above: the cache stores the name with a
+    literal space, and the raw admin slug (as Adobe always encodes it)
+    substitutes an underscore for that space."""
+    database.replace_managed_groups([
+        {"name": "Sample User Group", "system": "Other"},
+    ])
+    user = {"groups": {"_admin_Sample_User_Group"}}
+    result = special_permissions(user)
+    assert result.iloc[0]["category"] == "User Group Administrator"
+
+
 def test_special_permissions_is_empty_for_a_user_with_no_admin_roles():
     user = {"groups": {"AEM-PROD-AUTHORS", "CJA-ANALYSTS"}}
     assert special_permissions(user).empty
