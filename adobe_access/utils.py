@@ -137,11 +137,20 @@ _SPECIAL_PERMISSION_EXACT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^_?user[_ ]?group[_ ]?admin$", re.I), "User Group Administrator"),
     (re.compile(r"^_?licens\w*[_ ]?admin$", re.I), "License Administrator"),
     (re.compile(r"^_?storage[_ ]?admin$", re.I), "Storage Administrator"),
-    (re.compile(r"^_?developer$", re.I), "Developer"),
 ]
 _SPECIAL_PERMISSION_PREFIX_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^(_product[_ ]?admin(istrator)?|Product Administrator)", re.I), "Product Administrator"),
     (re.compile(r"^(_profile[_ ]?admin(istrator)?|Profile Administrator)", re.I), "Profile Administrator"),
+    # "_developer..." always groups as Developer, whatever follows.
+    (re.compile(r"^_developer", re.I), "Developer"),
+    # Confirmed against real tenant data: an unqualified "_admin..." — no
+    # "product"/"profile" immediately after the underscore, so this doesn't
+    # overlap with the two patterns above — is this tenant's Profile
+    # Administrator. Underscore-required, unlike the Product/Profile patterns
+    # above — bare "Admin" without it is too generic to safely catch (see the
+    # false-positive note in the module docstring), and no bare "Admin..."
+    # variant has been reported here.
+    (re.compile(r"^_admin", re.I), "Profile Administrator"),
 ]
 
 
