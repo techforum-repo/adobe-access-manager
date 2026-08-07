@@ -95,6 +95,45 @@ def is_privileged(name: str) -> bool:
     return any(x in upper for x in ("ADMIN", "OWNER", "DEVELOPER"))
 
 
+# Adobe represents org-level administrative roles — System Administrator,
+# Product Administrator (per product profile), Support Administrator, ... —
+# as specially-named entries in a user's own `groups` list, distinct from the
+# custom user groups this app provisions. They never pass client.is_user_group()'s
+# filter on the groups-listing endpoint, so without this they'd silently vanish
+# into membership_table()'s generic "ignored" count. Known ones are labeled;
+# anything else matching Adobe's reserved-name convention still gets surfaced
+# under its raw name rather than guessed at or dropped.
+_SPECIAL_PERMISSION_LABELS = {
+    "_org_admin": "System Administrator",
+    "_deployment_admin": "Deployment Administrator",
+    "_support_admin": "Support Administrator",
+    "_user_group_admin": "User Group Administrator",
+    "_licensing_admin": "License Administrator",
+    "_storage_admin": "Storage Administrator",
+}
+_PRODUCT_ADMIN_PREFIX = "_admin_"
+
+
+def is_special_permission(name: str) -> bool:
+    """True for an Adobe-reserved administrative-role name (leading underscore),
+    as opposed to an ordinary custom user group."""
+    return str(name).strip().startswith("_")
+
+
+def describe_special_permission(name: str) -> str:
+    """Best-effort friendly label. Product Administrator names carry a product
+    profile ID with no single fixed string, so that case is pattern-matched;
+    anything else unrecognized falls back to the raw Adobe name rather than a
+    guessed label."""
+    clean = str(name).strip()
+    if clean in _SPECIAL_PERMISSION_LABELS:
+        return _SPECIAL_PERMISSION_LABELS[clean]
+    if clean.startswith(_PRODUCT_ADMIN_PREFIX):
+        suffix = clean[len(_PRODUCT_ADMIN_PREFIX):]
+        return f"Product Administrator ({suffix})" if suffix else "Product Administrator"
+    return clean
+
+
 def sanitize_csv_cell(value: Any) -> Any:
     """Neutralize CSV/formula injection: a cell starting with =, +, -, @, or a tab
     is prefixed with a single quote so spreadsheet apps treat it as literal text

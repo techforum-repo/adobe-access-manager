@@ -8,6 +8,7 @@ import pandas as pd
 from .client import client
 from .database import read_managed_groups, read_managed_users
 from .provisioning import run
+from .utils import describe_special_permission, is_special_permission
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -111,17 +112,39 @@ def get_cached_user(email: str) -> dict[str, Any] | None:
     }
 
 
+def special_permissions(user: dict[str, Any]) -> pd.DataFrame:
+    """Org-level administrative roles this user holds (System Administrator,
+    Product Administrator, Support Administrator, ...) — read directly from
+    the user's raw Adobe `groups`, not the synced custom-group cache (these
+    are never part of it, see client.is_user_group())."""
+    names = sorted(
+        {str(g) for g in (user.get("groups") or set()) if is_special_permission(str(g))},
+        key=str.casefold,
+    )
+    if not names:
+        return pd.DataFrame(columns=["role", "adobe_group_name"])
+    return pd.DataFrame(
+        [{"role": describe_special_permission(name), "adobe_group_name": name} for name in names]
+    )
+
+
 def membership_table(user: dict[str, Any], managed_groups: pd.DataFrame | None = None) -> pd.DataFrame:
     """Return only memberships present in the synchronized custom user-group cache.
 
     `.attrs["ignored_non_custom_memberships"]` on the result reports how many of
     the user's real Adobe memberships were excluded because they're not in the
-    local custom-group cache (product profiles, admin groups, groups that haven't
-    been synced, ...) — context that this table is a subset, not the user's full
-    Adobe membership list.
+    local custom-group cache (product profiles, groups that haven't been synced,
+    ...) — context that this table is a subset, not the user's full Adobe
+    membership list. Special/administrative roles (System Administrator, ...)
+    are excluded from both this table and that count — see special_permissions()
+    — since they get their own dedicated section instead of being silently
+    lumped in as "just an unsynced group".
     """
     cached = read_managed_groups() if managed_groups is None else managed_groups.copy()
-    memberships = sorted(set(user.get("groups") or set()), key=str.casefold)
+    memberships = sorted(
+        {g for g in (user.get("groups") or set()) if not is_special_permission(str(g))},
+        key=str.casefold,
+    )
     columns = ["display_name", "system", "adobe_group_name", "cached"]
 
     def _finalize(frame: pd.DataFrame, ignored: int) -> pd.DataFrame:
@@ -241,6 +264,36 @@ def compare_custom_group_memberships(
     return pd.DataFrame(rows, columns=columns).sort_values(
         ["system", "display_name", "adobe_group_name"],
         key=lambda col: col.astype(str).str.casefold(),
+    ).reset_index(drop=True)
+
+
+def compare_special_permissions(left_user: dict[str, Any], right_user: dict[str, Any]) -> pd.DataFrame:
+    """Compare org-level administrative roles (System Administrator, Product
+    Administrator, ...) between two users — same "Shared/Only first/Only
+    second" shape as compare_custom_group_memberships(), but sourced from
+    each user's raw `groups` directly rather than the custom-group cache,
+    since these roles are never part of it."""
+    columns = ["role", "adobe_group_name", "left_member", "right_member", "comparison"]
+    left_names = {str(g) for g in (left_user.get("groups") or set()) if is_special_permission(str(g))}
+    right_names = {str(g) for g in (right_user.get("groups") or set()) if is_special_permission(str(g))}
+    all_names = left_names | right_names
+    if not all_names:
+        return pd.DataFrame(columns=columns)
+
+    rows: list[dict[str, Any]] = []
+    for name in all_names:
+        left_member = name in left_names
+        right_member = name in right_names
+        comparison = "Shared" if left_member and right_member else ("Only first user" if left_member else "Only second user")
+        rows.append({
+            "role": describe_special_permission(name),
+            "adobe_group_name": name,
+            "left_member": left_member,
+            "right_member": right_member,
+            "comparison": comparison,
+        })
+    return pd.DataFrame(rows, columns=columns).sort_values(
+        "role", key=lambda col: col.astype(str).str.casefold()
     ).reset_index(drop=True)
 
 

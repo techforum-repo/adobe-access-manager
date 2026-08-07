@@ -1,5 +1,5 @@
 from adobe_access.client import is_user_group
-from adobe_access.utils import derive_name, validate_email
+from adobe_access.utils import derive_name, describe_special_permission, is_special_permission, validate_email
 
 
 def test_name_derivation():
@@ -52,6 +52,30 @@ def test_a_trailing_disambiguation_digit_is_allowed():
 def test_a_leading_or_embedded_digit_is_still_rejected():
     assert not validate_email("2john.smith@example.com", {"example.com"})[0]
     assert not validate_email("jo2hn.smith@example.com", {"example.com"})[0]
+
+
+def test_is_special_permission_detects_the_underscore_prefix():
+    assert is_special_permission("_org_admin")
+    assert is_special_permission("_admin_12345")
+    assert not is_special_permission("AEM-PROD-AUTHORS")
+    assert not is_special_permission("BSC-CJA-USERS")
+
+
+def test_describe_special_permission_uses_known_friendly_labels():
+    assert describe_special_permission("_org_admin") == "System Administrator"
+    assert describe_special_permission("_support_admin") == "Support Administrator"
+    assert describe_special_permission("_deployment_admin") == "Deployment Administrator"
+
+
+def test_describe_special_permission_handles_product_admin_with_a_dynamic_suffix():
+    assert describe_special_permission("_admin_12345abc") == "Product Administrator (12345abc)"
+    assert describe_special_permission("_admin_") == "Product Administrator"
+
+
+def test_describe_special_permission_falls_back_to_the_raw_name_when_unknown():
+    """Never invent a label it isn't sure of — an unrecognized underscore-prefixed
+    role still surfaces under its real Adobe name rather than a guess."""
+    assert describe_special_permission("_some_future_admin_role") == "_some_future_admin_role"
 
 
 def test_three_or_more_dot_separated_parts_are_rejected():

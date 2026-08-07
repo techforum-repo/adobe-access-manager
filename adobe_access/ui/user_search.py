@@ -13,6 +13,7 @@ from adobe_access.users import (
     get_cached_user,
     lookup_user,
     membership_table,
+    special_permissions,
     user_export_table,
 )
 from adobe_access.utils import safe_csv
@@ -144,14 +145,24 @@ def _render_user_detail(user: dict, *, key_prefix: str) -> None:
     name = user.get("display_name") or user.get("email") or "Unknown user"
     st.markdown(f"### {name}")
     st.caption(str(user.get("email") or ""))
-    c1, c2, c3 = st.columns(3)
+    special = special_permissions(user)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Identity type", user.get("identity_type") or "Unknown")
     c2.metric("Status", user.get("status") or "Unknown")
     memberships = membership_table(user)
     c3.metric("Custom user groups", len(memberships))
+    c4.metric("Special permissions", len(special))
     ignored = memberships.attrs.get("ignored_non_custom_memberships", 0)
     if ignored:
         st.caption(f"{ignored} other Adobe membership(s) not shown — not in the synced custom-group cache.")
+
+    if not special.empty:
+        st.markdown("###### ⚠️ Special permissions")
+        st.caption("Org-level administrative roles — read live from Adobe, not the synced custom-group cache.")
+        st.dataframe(
+            special.rename(columns={"role": "Role", "adobe_group_name": "Adobe name"}),
+            width='stretch', hide_index=True,
+        )
 
     if memberships.empty:
         st.info("This user has no memberships in the locally synchronized Adobe custom user groups.")
