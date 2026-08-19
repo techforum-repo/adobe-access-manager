@@ -13,12 +13,15 @@ import pandas as pd
 _FORMULA_TRIGGER_CHARS = ("=", "+", "-", "@", "\t", "\r")
 
 # Required shape for a new user's email in the Provision wizard: exactly two
-# parts separated by one dot, each letters optionally followed by trailing
-# digits (e.g. "john.doe", "john2.doe" — a common disambiguation suffix when
-# the plain name is already taken). Deliberately strict otherwise — no
-# underscores, hyphens, leading/embedded digits, or extra parts — since this
-# is specifically the org's account-naming convention, not general email syntax.
-_FIRSTNAME_LASTNAME_RE = re.compile(r"[A-Za-z]+\d*\.[A-Za-z]+\d*")
+# parts separated by one dot, each one or more hyphen-joined letter groups
+# (e.g. "mary-jane.smith", "john.smith-jones" — compound/double-barrelled
+# names) optionally followed by trailing digits (e.g. "john.doe", "john2.doe"
+# — a common disambiguation suffix when the plain name is already taken).
+# Deliberately strict otherwise — no underscores, leading/embedded digits, a
+# hyphen used as the firstname/lastname separator itself, or extra parts —
+# since this is specifically the org's account-naming convention, not general
+# email syntax.
+_FIRSTNAME_LASTNAME_RE = re.compile(r"[A-Za-z]+(?:-[A-Za-z]+)*\d*\.[A-Za-z]+(?:-[A-Za-z]+)*\d*")
 
 
 @dataclass(frozen=True)
@@ -42,7 +45,10 @@ def _strip_disambiguation_suffix(part: str) -> str:
 
 def derive_name(email: str) -> ParsedName:
     local = email.split("@", 1)[0]
-    parts = [p for p in re.split(r"[._-]+", local) if p]
+    # Split on dot/underscore only — a hyphen stays attached to the part it's
+    # in (e.g. "mary-jane.smith" -> "Mary-Jane" / "Smith", not "Mary" /
+    # "Jane Smith") so compound/double-barrelled names round-trip intact.
+    parts = [p for p in re.split(r"[._]+", local) if p]
     if not parts:
         return ParsedName("", "", True)
     first = _strip_disambiguation_suffix(parts[0]).title()
@@ -59,7 +65,7 @@ def validate_email(email: str, allowed_domains: set[str]) -> tuple[bool, str]:
     if allowed_domains and domain not in allowed_domains:
         return False, f"Only {', '.join(sorted(allowed_domains))} addresses are allowed"
     if not _FIRSTNAME_LASTNAME_RE.fullmatch(local):
-        return False, "Email must be firstname.lastname@domain (letters, optionally a trailing digit, exactly one dot)"
+        return False, "Email must be firstname.lastname@domain (letters, optional internal hyphens, an optional trailing digit, exactly one dot)"
     return True, ""
 
 
