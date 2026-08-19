@@ -44,8 +44,37 @@ def test_a_single_word_local_part_is_rejected():
 
 
 def test_underscore_or_hyphen_separated_local_parts_are_rejected():
+    """A hyphen used AS the firstname/lastname separator (instead of the
+    required dot) is still rejected — distinct from a hyphen inside one of
+    the name parts itself, which is allowed (see the compound-name tests
+    below)."""
     assert not validate_email("john_smith@example.com", {"example.com"})[0]
     assert not validate_email("john-smith@example.com", {"example.com"})[0]
+
+
+def test_hyphenated_compound_names_are_allowed():
+    """e.g. "Mary-Jane" or "Smith-Jones" — double-barrelled names."""
+    assert validate_email("mary-jane.smith@example.com", {"example.com"})[0]
+    assert validate_email("john.smith-jones@example.com", {"example.com"})[0]
+    assert validate_email("mary-jane.smith-jones@example.com", {"example.com"})[0]
+
+
+def test_hyphenated_name_still_requires_letters_around_the_hyphen():
+    assert not validate_email("mary-.smith@example.com", {"example.com"})[0]
+    assert not validate_email("-mary.smith@example.com", {"example.com"})[0]
+    assert not validate_email("mary--jane.smith@example.com", {"example.com"})[0]
+
+
+def test_hyphenated_name_with_trailing_disambiguation_digit_is_allowed():
+    assert validate_email("mary-jane2.smith@example.com", {"example.com"})[0]
+
+
+def test_name_derivation_keeps_a_hyphenated_part_intact():
+    p = derive_name("mary-jane.smith@example.com")
+    assert p.first_name == "Mary-Jane" and p.last_name == "Smith"
+
+    p = derive_name("john.smith-jones@example.com")
+    assert p.first_name == "John" and p.last_name == "Smith-Jones"
 
 
 def test_a_trailing_disambiguation_digit_is_allowed():
