@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from adobe_access.retry import call_with_retry
+from adobe_access.errors import AdobeRateLimitError
+from adobe_access.retry import MAX_RETRY_AFTER_SECONDS, call_with_retry
 
 
 def test_succeeds_on_first_try_without_sleeping():
@@ -60,3 +61,27 @@ def test_gives_up_after_max_attempts_on_persistent_transient_failure():
     assert calls["n"] == 3
     assert result.retries == 2
     assert len(sleeps) == 2
+
+
+def test_honors_adobes_retry_after_hint_instead_of_exponential_backoff():
+    calls = {"n": 0}
+
+    def rate_limited_then_ok():
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise AdobeRateLimitError("Adobe returned HTTP 429: too many requests", retry_after=3.5)
+        return "ok"
+
+    sleeps = []
+    result = call_with_retry(rate_limited_then_ok, sleep=sleeps.append)
+    assert result.success is True
+    assert sleeps == [3.5]  # not the exponential default (1.0)
+
+
+def test_caps_an_unreasonably_large_retry_after():
+    def always_rate_limited():
+        raise AdobeRateLimitError("Adobe returned HTTP 429: too many requests", retry_after=9999.0)
+
+    sleeps = []
+    call_with_retry(always_rate_limited, max_attempts=2, sleep=sleeps.append)
+    assert sleeps == [MAX_RETRY_AFTER_SECONDS]

@@ -9,6 +9,21 @@ UI wraps this with a small renderer in app.py.
 from dataclasses import dataclass, field
 
 
+class AdobeRateLimitError(RuntimeError):
+    """Raised specifically for Adobe HTTP 429 responses.
+
+    Carries the `Retry-After` header (seconds) when Adobe sends one, so
+    retry.call_with_retry can wait exactly as long as Adobe asked instead of
+    guessing with blind exponential backoff. `retry_after` is None when the
+    header was absent or unparsable, in which case the caller falls back to
+    the normal backoff schedule.
+    """
+
+    def __init__(self, message: str, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 @dataclass(frozen=True)
 class FriendlyError:
     title: str
@@ -52,7 +67,13 @@ def friendly_error(exc: BaseException) -> FriendlyError:
     if "http 401" in lowered or "http 403" in lowered:
         return FriendlyError("Adobe rejected the request (permission denied)", _AUTH_REASONS, retryable=False)
     if "http 429" in lowered:
-        return FriendlyError("Adobe is rate-limiting requests", ["Too many requests were sent in a short period. Wait a moment and retry."])
+        return FriendlyError(
+            "Adobe is rate-limiting requests",
+            [
+                "Too many requests were sent in a short period. Wait a moment and retry.",
+                "For bulk runs, lower \"Adobe requests/sec limit\" on the Settings page.",
+            ],
+        )
     if "http 5" in lowered and "adobe returned http 5" in lowered:
         return FriendlyError("Adobe returned a server error", ["Adobe is having a temporary issue on their end."])
     if "enter a complete email" in lowered or "invalid email" in lowered:

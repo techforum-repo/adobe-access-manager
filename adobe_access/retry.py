@@ -7,6 +7,13 @@ Classification is delegated to `errors.friendly_error(exc).retryable`, so the
 timeouts, connection failures, and HTTP 429/5xx are retried with exponential
 backoff; invalid email, permission denied (401/403), and missing
 configuration are not.
+
+A 429 specifically carries Adobe's own `Retry-After` hint (see
+`errors.AdobeRateLimitError`) when Adobe sent one — that's honored in place
+of the exponential guess, since Adobe telling us exactly how long to wait is
+more reliable than backing off blind. `client._RequestPacer` handles the
+*proactive* side (pacing requests so 429s are rare in the first place); this
+is the reactive fallback for when one happens anyway.
 """
 
 import time
@@ -20,6 +27,10 @@ T = TypeVar("T")
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_BASE_DELAY_SECONDS = 1.0
 DEFAULT_MAX_DELAY_SECONDS = 8.0
+# Ceiling on an Adobe-supplied Retry-After, so a stray huge value can't stall
+# a bulk run indefinitely — retry attempts simply give up (as any other
+# retryable-but-exhausted failure does) rather than waiting past this.
+MAX_RETRY_AFTER_SECONDS = 30.0
 
 
 @dataclass
@@ -63,5 +74,9 @@ def call_with_retry(
             last_error = str(exc)
             if not friendly_error(exc).retryable or attempt == max_attempts:
                 return RetryResult(value=None, success=False, attempts=attempt, retries=attempt - 1, last_error=last_error)
-            sleep_fn(backoff_delay(attempt, base_delay, max_delay))
+            retry_after = getattr(exc, "retry_after", None)
+            if isinstance(retry_after, (int, float)) and retry_after >= 0:
+                sleep_fn(min(float(retry_after), MAX_RETRY_AFTER_SECONDS))
+            else:
+                sleep_fn(backoff_delay(attempt, base_delay, max_delay))
     return RetryResult(value=None, success=False, attempts=max_attempts, retries=max_attempts - 1, last_error=last_error)
