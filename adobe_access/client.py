@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 import uuid
 from typing import Any
@@ -8,7 +9,8 @@ from urllib.parse import quote
 import httpx
 
 from .config import settings
-from .settings_store import default_country, default_identity_type
+from .errors import AdobeRateLimitError
+from .settings_store import adobe_requests_per_second, default_country, default_identity_type
 from .utils import classify_environment, classify_system, is_privileged
 
 
@@ -31,6 +33,55 @@ def is_user_group(item: dict[str, Any]) -> bool:
     if kind in {"user_group", "usergroup"}:
         return True
     return False
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """Parse the `Retry-After` header's seconds form (Adobe sends seconds, not
+    an HTTP-date). Returns None on anything else so the caller falls back to
+    exponential backoff instead of guessing."""
+    if not value:
+        return None
+    try:
+        seconds = float(value.strip())
+    except ValueError:
+        return None
+    return seconds if seconds >= 0 else None
+
+
+class _RequestPacer:
+    """Enforces a minimum spacing between outgoing Adobe UMAPI requests.
+
+    Adobe throttles per technical account (client_id/org), not per
+    AdobeUMAPIClient instance or Streamlit session — so this state is
+    process-wide (module-level singleton below), shared by every session
+    hitting the same Adobe org. Without it, a bulk run (get_user + an action
+    call per row, times dozens/hundreds of emails across preview, test, and
+    execute) fires requests back-to-back as fast as the network allows, which
+    is exactly what trips Adobe's 429 "Too many requests" once the email
+    count grows. The rate is read fresh on every wait() call (not cached at
+    construction) so a Settings-page change takes effect on the very next
+    request, mid-run.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._next_allowed_at = 0.0
+
+    def wait(self) -> None:
+        rps = adobe_requests_per_second()
+        if rps <= 0:
+            return  # throttling disabled
+        min_interval = 1.0 / rps
+        with self._lock:
+            now = time.monotonic()
+            delay = self._next_allowed_at - now
+            if delay > 0:
+                time.sleep(delay)
+                now = time.monotonic()
+            self._next_allowed_at = now + min_interval
+
+
+_pacer = _RequestPacer()
 
 
 def _first_value(mapping: dict[str, Any], *keys: str) -> Any:
@@ -231,6 +282,7 @@ class AdobeUMAPIClient:
         every public method below owns one `httpx.AsyncClient` for its full
         duration (including internal pagination) and reuses it here.
         """
+        _pacer.wait()
         try:
             response = await http.request(method, url, headers=await self._headers(http), **kwargs)
             if response.status_code == 404:
@@ -243,6 +295,9 @@ class AdobeUMAPIClient:
             raise RuntimeError(f"Adobe request timed out. Endpoint: {url}") from exc
         except httpx.HTTPStatusError as exc:
             detail = exc.response.text[:500]
+            if exc.response.status_code == 429:
+                retry_after = _parse_retry_after(exc.response.headers.get("Retry-After"))
+                raise AdobeRateLimitError(f"Adobe returned HTTP 429: {detail}", retry_after=retry_after) from exc
             raise RuntimeError(f"Adobe returned HTTP {exc.response.status_code}: {detail}") from exc
         except httpx.HTTPError as exc:
             # Catch-all for httpx failure modes that aren't a plain connect/timeout/status

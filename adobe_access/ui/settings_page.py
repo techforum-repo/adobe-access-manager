@@ -45,6 +45,10 @@ def render() -> None:
             "Auto Adobe validation", value=bool(values["auto_adobe_validation"]),
             help=field_help["auto_adobe_validation"],
         )
+        rps_value = st.number_input(
+            "Adobe requests/sec limit", min_value=0.0, max_value=50.0, step=0.5,
+            value=float(values["adobe_requests_per_second"]), help=field_help["adobe_requests_per_second"],
+        )
         save_col, reset_col = st.columns([1, 4])
         saved = save_col.form_submit_button("Save settings", type="primary")
         reset_clicked = reset_col.form_submit_button("Reset to .env defaults")
@@ -65,6 +69,7 @@ def render() -> None:
                     "default_identity_type": identity_value,
                     "cache_ttl_seconds": int(ttl_value),
                     "auto_adobe_validation": auto_validate_value,
+                    "adobe_requests_per_second": float(rps_value),
                 },
                 st.session_state.actor,
             )

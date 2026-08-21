@@ -28,7 +28,7 @@ def _from_bool(value: bool) -> str:
 class Field:
     key: str
     label: str
-    kind: str  # "str" | "int" | "bool"
+    kind: str  # "str" | "int" | "float" | "bool"
     default: Callable[[], Any]
     help: str = ""
 
@@ -59,6 +59,13 @@ FIELDS: list[Field] = [
         lambda: True,
         "Automatically look up users in Adobe as soon as the Validate step opens.",
     ),
+    Field(
+        "adobe_requests_per_second", "Adobe requests/sec limit", "float",
+        lambda: settings.adobe_requests_per_second,
+        "Caps how fast this app sends requests to Adobe's User Management API. "
+        "Lower this if bulk runs with many emails still hit \"Too many requests\" (429) "
+        "errors; 0 disables throttling.",
+    ),
 ]
 
 _FIELDS_BY_KEY = {field.key: field for field in FIELDS}
@@ -67,6 +74,8 @@ _FIELDS_BY_KEY = {field.key: field for field in FIELDS}
 def _parse(field: Field, raw: str) -> Any:
     if field.kind == "int":
         return int(raw)
+    if field.kind == "float":
+        return float(raw)
     if field.kind == "bool":
         return _to_bool(raw)
     return raw
@@ -150,3 +159,10 @@ def cache_ttl_seconds() -> int:
 
 def auto_adobe_validation() -> bool:
     return bool(current_values()["auto_adobe_validation"])
+
+
+def adobe_requests_per_second() -> float:
+    try:
+        return float(current_values()["adobe_requests_per_second"])
+    except (TypeError, ValueError):
+        return settings.adobe_requests_per_second

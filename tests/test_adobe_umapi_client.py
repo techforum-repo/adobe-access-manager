@@ -9,9 +9,11 @@ are redirected to it by monkeypatching `httpx.AsyncClient` for the test.
 import httpx
 import pytest
 
+from adobe_access import client as client_module
 from adobe_access import database
 from adobe_access.client import AdobeUMAPIClient
 from adobe_access.config import settings
+from adobe_access.errors import AdobeRateLimitError
 from adobe_access.provisioning import run
 
 ORG_ID = "org@AdobeOrg"
@@ -180,3 +182,66 @@ def test_connect_error_still_gets_its_specific_friendly_message(configured, monk
     client = AdobeUMAPIClient()
     with pytest.raises(RuntimeError, match="Cannot connect to Adobe"):
         run(client.list_groups())
+
+
+def test_429_raises_adobe_rate_limit_error_with_parsed_retry_after(configured, monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/token":
+            return _token_response()
+        return httpx.Response(429, text="slow down", headers={"Retry-After": "7"})
+
+    _install_transport(monkeypatch, handler)
+    client = AdobeUMAPIClient()
+    with pytest.raises(AdobeRateLimitError) as exc_info:
+        run(client.list_groups())
+    assert exc_info.value.retry_after == 7.0
+
+
+def test_429_without_a_retry_after_header_leaves_it_none(configured, monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/token":
+            return _token_response()
+        return httpx.Response(429, text="slow down")
+
+    _install_transport(monkeypatch, handler)
+    client = AdobeUMAPIClient()
+    with pytest.raises(AdobeRateLimitError) as exc_info:
+        run(client.list_groups())
+    assert exc_info.value.retry_after is None
+
+
+def test_request_pacer_enforces_the_configured_minimum_interval(monkeypatch):
+    """Bulk provisioning fires many requests back to back; the pacer's job is
+    to space them out so that never becomes a 429 burst. Verified against a
+    fake clock so the test doesn't actually sleep."""
+    pacer = client_module._RequestPacer()
+    monkeypatch.setattr(client_module, "adobe_requests_per_second", lambda: 5.0)  # -> 0.2s interval
+    fake_now = {"t": 100.0}
+    sleeps: list[float] = []
+    monkeypatch.setattr(client_module.time, "monotonic", lambda: fake_now["t"])
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        fake_now["t"] += seconds
+
+    monkeypatch.setattr(client_module.time, "sleep", fake_sleep)
+
+    pacer.wait()  # first call: nothing to wait on yet
+    assert sleeps == []
+    pacer.wait()  # immediately after: must wait out the rest of the interval
+    assert sleeps == [pytest.approx(0.2)]
+
+    fake_now["t"] += 0.2  # enough time has now passed on its own
+    pacer.wait()
+    assert sleeps == [pytest.approx(0.2)]  # unchanged — no extra sleep needed
+
+
+def test_request_pacer_disabled_when_rate_limit_is_zero(monkeypatch):
+    pacer = client_module._RequestPacer()
+    monkeypatch.setattr(client_module, "adobe_requests_per_second", lambda: 0)
+    monkeypatch.setattr(
+        client_module.time, "sleep",
+        lambda seconds: pytest.fail("throttling should be disabled when the rate limit is 0"),
+    )
+    pacer.wait()
+    pacer.wait()

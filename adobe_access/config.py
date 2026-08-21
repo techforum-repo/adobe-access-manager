@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     adobe_ims_token_url: str = "https://ims-na1.adobelogin.com/ims/token/v3"
     adobe_umapi_base_url: str = "https://usermanagement.adobe.io/v2/usermanagement"
     adobe_http_timeout: float = 60.0
+    # Adobe doesn't publish an exact UMAPI rate limit; this is a conservative
+    # default (one request every 200ms) meant to keep bulk provisioning runs
+    # under it. Tunable from the Settings page without a restart; 0 disables
+    # throttling entirely.
+    adobe_requests_per_second: float = 5.0
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property
