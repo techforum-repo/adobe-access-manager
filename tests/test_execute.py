@@ -104,11 +104,11 @@ def test_execute_retries_transient_failure_then_succeeds(monkeypatch):
     calls = {"n": 0}
     real_provision = provisioning.client.provision
 
-    async def flaky_provision(email, first_name, last_name, groups, test_only):
+    async def flaky_provision(email, first_name, last_name, groups, test_only, groups_to_remove=None):
         calls["n"] += 1
         if calls["n"] < 2:
             raise RuntimeError("Adobe request timed out. Endpoint: https://x")
-        return await real_provision(email, first_name, last_name, groups, test_only)
+        return await real_provision(email, first_name, last_name, groups, test_only, groups_to_remove=groups_to_remove)
 
     monkeypatch.setattr(provisioning.client, "provision", flaky_provision)
     sleeps = []
@@ -125,7 +125,7 @@ def test_execute_retries_transient_failure_then_succeeds(monkeypatch):
 def test_execute_does_not_retry_permanent_failure(monkeypatch):
     calls = {"n": 0}
 
-    async def always_forbidden(email, first_name, last_name, groups, test_only):
+    async def always_forbidden(email, first_name, last_name, groups, test_only, groups_to_remove=None):
         calls["n"] += 1
         raise RuntimeError("Adobe returned HTTP 403: forbidden")
 
@@ -138,6 +138,34 @@ def test_execute_does_not_retry_permanent_failure(monkeypatch):
     assert "403" in row["error"] or "forbidden" in row["error"].lower()
 
 
+def test_execute_removes_a_group_the_user_currently_holds():
+    users = build_user_table(["existing.user@example.com"])
+    result = execute(users, [], test_only=False, groups_to_remove=["AEM-PROD-AUTHORS"])
+    row = result.iloc[0]
+    assert bool(row["success"]) is True
+    assert row["groups_removed"] == ["AEM-PROD-AUTHORS"]
+    assert "AEM-PROD-AUTHORS" not in provisioning.client.users["existing.user@example.com"]["groups"]
+
+
+def test_execute_remove_ignores_a_group_the_user_does_not_have():
+    """Asking to remove a group the user was never in is a no-op, not a failure —
+    matches the add side's existing idempotent behavior."""
+    users = build_user_table(["existing.user@example.com"])
+    result = execute(users, [], test_only=False, groups_to_remove=["SOME-OTHER-GROUP"])
+    row = result.iloc[0]
+    assert bool(row["success"]) is True
+    assert row["groups_removed"] == []
+    assert provisioning.client.users["existing.user@example.com"]["groups"] == {"AEM-PROD-AUTHORS"}
+
+
+def test_execute_test_only_reports_removal_without_changing_membership():
+    users = build_user_table(["existing.user@example.com"])
+    result = execute(users, [], test_only=True, groups_to_remove=["AEM-PROD-AUTHORS"])
+    row = result.iloc[0]
+    assert row["groups_removed"] == ["AEM-PROD-AUTHORS"]
+    assert provisioning.client.users["existing.user@example.com"]["groups"] == {"AEM-PROD-AUTHORS"}
+
+
 def test_execution_summary_counts_created_existing_failed_and_retries():
     results = pd.DataFrame([
         {"email": "a@example.com", "success": True, "created": True, "groups_added": ["G1", "G2"], "already_assigned": [], "retries": 1, "error": ""},
@@ -147,12 +175,12 @@ def test_execution_summary_counts_created_existing_failed_and_retries():
     summary = execution_summary(results)
     assert summary == {
         "created": 1, "existing": 1, "groups_added": 2,
-        "already_assigned": 1, "failed": 1, "retries": 3,
+        "already_assigned": 1, "groups_removed": 0, "failed": 1, "retries": 3,
     }
 
 
 def test_execution_summary_handles_empty_results():
     assert execution_summary(pd.DataFrame()) == {
         "created": 0, "existing": 0, "groups_added": 0,
-        "already_assigned": 0, "failed": 0, "retries": 0,
+        "already_assigned": 0, "groups_removed": 0, "failed": 0, "retries": 0,
     }

@@ -12,8 +12,8 @@ workflow, a few things it does that the console doesn't:
 
 - **Preview is a first-class step, not an afterthought.** Every change goes through a Review
   step showing exactly what will happen — new user or existing, which groups get added, which
-  are already assigned — before anything is sent to Adobe. "Run test" sends the real
-  `testOnly=true` payload so you see Adobe's own validation, not just local guesses.
+  are already assigned, which get removed — before anything is sent to Adobe. "Run test" sends
+  the real `testOnly=true` payload so you see Adobe's own validation, not just local guesses.
 - **Bulk, not one-at-a-time.** Paste or upload a list of users once; validation, name derivation,
   duplicate detection, and domain checks happen together, not per-user click-through.
 - **Templates.** Save a named bundle of groups once ("CJA Analyst", "AEM Prod Author") and apply
@@ -201,11 +201,14 @@ corporate proxy is slow).
 - **Dashboard** — connection/sync/request health at a glance, quick actions,
   recent requests and activity, favorite groups, most-used templates. Never
   calls Adobe itself.
-- **Provision access** — the 4-step wizard (Users → Validate → Access → Review). Review
-  always offers "Run test" (Adobe `testOnly=true`, never writes). When
-  `ADOBE_WRITE_ENABLED=true`, it also offers **Execute** — gated by a confirmation
-  dialog, idempotent, retried with backoff on transient failures, and fully logged
-  (see "Production readiness checklist").
+- **Provision access** — the 4-step wizard (Users → Validate → Access → Review). The Access
+  step supports both directions: add groups (template, favorites, or search) and mark groups
+  for removal (its own search picker) — a group in both lists is added, not removed, and the
+  UI flags the conflict. Removal only ever affects a selected user who currently holds that
+  group; it's a no-op for anyone who doesn't. Review always offers "Run test" (Adobe
+  `testOnly=true`, never writes). When `ADOBE_WRITE_ENABLED=true`, it also offers **Execute** —
+  gated by a confirmation dialog, idempotent, retried with backoff on transient failures, and
+  fully logged (see "Production readiness checklist").
 - **User search** — two tabs. "Search Adobe" does a live, exact-email lookup (always
   current). "Browse synced users" searches a local directory cache instead — including a
   blank search to list everyone synced — populated by its own "Sync users from Adobe"
@@ -265,7 +268,7 @@ Before flipping `ADOBE_WRITE_ENABLED=true` against a real tenant:
 | Item | Status | Where |
 |---|---|---|
 | Feature flag controls all write operations | ✅ | `ADOBE_WRITE_ENABLED` gates both the UI (Execute section only renders when enabled, on both Provision access's Review step and Copy access) and the client (`AdobeUMAPIClient.provision()` raises if a non-test call is attempted while disabled) — two independent checks, never a UI toggle. |
-| Execute requires an explicit confirmation dialog | ✅ | Review step (and Copy access) shows exact counts ("Create N users, add M group assignments") plus a required checkbox before Execute is clickable. |
+| Execute requires an explicit confirmation dialog | ✅ | Review step (and Copy access) shows exact counts ("Create N users, add M group assignments", plus removals when any are staged) plus a required checkbox before Execute is clickable. |
 | Every request receives a unique Request ID | ✅ | `recent_requests.id` per preview; each Execute additionally gets its own `executions.id`. |
 | Each Adobe API operation is logged with timestamp and outcome | ✅ | Every user's outcome is written to `audit_events` (visible on Audit history) and mirrored to `logs/access-manager.log`; each Execute run's start/end/duration is stored in `executions`. |
 | Partial failures are reported without stopping unrelated users | ✅ | `execute()` continues past a failed user; the run is marked `Partial` (vs. `Succeeded`/`Failed`) and every row's outcome is shown individually. |

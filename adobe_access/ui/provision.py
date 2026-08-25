@@ -31,6 +31,16 @@ from adobe_access.ui.shared import group_catalog, group_picker, reset_group_pick
 from adobe_access.utils import safe_csv
 
 
+def _effective_groups_to_remove() -> list[str]:
+    """Groups marked for removal, minus any that are also in the add list.
+
+    Recomputed from session state everywhere it's needed (access step, review
+    step, run test, execute) rather than cached once, so it always reflects
+    the current selection even if the user goes Back and edits either list.
+    """
+    return [g for g in st.session_state.selected_groups_to_remove if g not in st.session_state.selected_groups]
+
+
 def render() -> None:
     steps = st.columns(4)
     for index, title in enumerate(["1. Users", "2. Validate", "3. Access", "4. Review"], start=1):
@@ -248,8 +258,20 @@ def _render_step_access() -> None:
         st.toast(f"Added {len(candidate_groups)} group(s).")
         st.rerun()
 
+    st.markdown("###### 4. Remove groups")
+    st.caption(
+        "Applies to any selected user who currently holds the group — users who don't have it are "
+        "unaffected. A group listed here is dropped from removal if it's also in Selected groups above."
+    )
+    remove_candidates = group_picker(groups, "provision_remove", [])
+    if st.button("Add to removal list", disabled=not remove_candidates):
+        st.session_state.selected_groups_to_remove = list(dict.fromkeys(st.session_state.selected_groups_to_remove + remove_candidates))
+        reset_group_picker("provision_remove")
+        st.toast(f"Added {len(remove_candidates)} group(s) to the removal list.")
+        st.rerun()
+
     st.divider()
-    st.markdown("###### Selected groups")
+    st.markdown("###### Selected groups (will be added)")
     if not st.session_state.selected_groups:
         st.info("Nothing selected yet — apply a template, add favorites, or search and add groups above.")
     else:
@@ -281,14 +303,43 @@ def _render_step_access() -> None:
         if privileged_names:
             st.warning("Privileged groups selected: " + ", ".join(privileged_names))
 
+    st.markdown("###### Groups to remove")
+    # A group added to both lists is dropped from removal, not from the add
+    # list — add wins, since it's the more common/intentional action and
+    # silently dropping a just-clicked "Add" would be more surprising.
+    effective_remove = _effective_groups_to_remove()
+    conflicting = [g for g in st.session_state.selected_groups_to_remove if g in st.session_state.selected_groups]
+    if not st.session_state.selected_groups_to_remove:
+        st.caption("Nothing marked for removal.")
+    else:
+        header = st.columns([3, 2, 3, 1])
+        header[0].markdown("**Display name**")
+        header[1].markdown("**System**")
+        header[2].markdown("**Adobe user group**")
+        with st.container(height=200):
+            for name in st.session_state.selected_groups_to_remove:
+                meta = catalog_lookup.get(str(name).strip().casefold(), {})
+                display_name = (meta.get("display_name") if hasattr(meta, "get") else None) or name
+                system = (meta.get("system") if hasattr(meta, "get") else None) or "Other"
+                is_conflicting = name in conflicting
+                c1, c2, c3, c4 = st.columns([3, 2, 3, 1])
+                c1.write(f"{display_name}{' (also in Add — skipped)' if is_conflicting else ''}")
+                c2.write(system)
+                c3.write(name)
+                if c4.button("Remove", key=f"remove_removal_group_{name}"):
+                    st.session_state.selected_groups_to_remove = [g for g in st.session_state.selected_groups_to_remove if g != name]
+                    st.rerun()
+        if conflicting:
+            st.warning("Also in Selected groups, so these will be added, not removed: " + ", ".join(conflicting))
+
     st.divider()
     b1, b2 = st.columns([1, 4])
     if b1.button("Back"):
         st.session_state.provision_step = 2
         st.rerun()
-    if b2.button("Build preview", type="primary", disabled=not st.session_state.selected_groups):
+    if b2.button("Build preview", type="primary", disabled=not st.session_state.selected_groups and not effective_remove):
         with st.spinner("Checking users and current memberships in Adobe..."):
-            st.session_state.preview = preview(st.session_state.users, st.session_state.selected_groups)
+            st.session_state.preview = preview(st.session_state.users, st.session_state.selected_groups, effective_remove)
         summary = preview_summary(st.session_state.preview)
         template = get_template(int(st.session_state.active_template_id)) if st.session_state.active_template_id else None
         request_users = st.session_state.users.to_dict("records")
@@ -301,19 +352,24 @@ def _render_step_access() -> None:
             int(st.session_state.active_template_id) if st.session_state.active_template_id else None,
             template.get("name", "") if template else "",
         )
-        record(st.session_state.actor, "provision-preview", "", st.session_state.selected_groups, "Success", str(summary))
+        record(
+            st.session_state.actor, "provision-preview", "", st.session_state.selected_groups, "Success",
+            str(summary) + (f"; Groups to remove: {', '.join(effective_remove)}" if effective_remove else ""),
+        )
         st.session_state.provision_step = 4
         st.rerun()
 
 
 def _render_step_review() -> None:
     summary = preview_summary(st.session_state.preview)
-    m1, m2, m3, m4, m5 = st.columns(5)
+    groups_to_remove = _effective_groups_to_remove()
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("Users", summary["users"])
     m2.metric("Existing", summary["existing"])
     m3.metric("New", summary["new"])
     m4.metric("Assignments to add", summary["assignments"])
     m5.metric("Already assigned", summary["already"])
+    m6.metric("Assignments to remove", summary["removals"])
     failed = summary["failures"]
     if len(st.session_state.preview) <= 12:
         for _, user_row in st.session_state.preview.iterrows():
@@ -324,6 +380,8 @@ def _render_step_review() -> None:
                 c1.write(user_row["user_action"])
                 c2.markdown(f"**Will add:** {user_row['groups_to_add']}")
                 c2.caption(f"Already assigned: {user_row['already_assigned']}")
+                if str(user_row.get("groups_to_remove", "None")) not in ("None", "Not evaluated"):
+                    c2.markdown(f"**Will remove:** {user_row['groups_to_remove']}")
                 if user_row.get("lookup") != "OK":
                     c2.error(str(user_row.get("lookup")))
     else:
@@ -343,14 +401,25 @@ def _render_step_review() -> None:
         for _, row in st.session_state.users[st.session_state.users["include"] == True].iterrows():  # noqa: E712
             email = str(row["email"])
             try:
-                result = run(client.provision(email, str(row["first_name"]), str(row["last_name"]), st.session_state.selected_groups, test_only=True))
+                result = run(client.provision(
+                    email, str(row["first_name"]), str(row["last_name"]),
+                    st.session_state.selected_groups, test_only=True, groups_to_remove=groups_to_remove,
+                ))
                 status = "Test passed" if result["success"] else "Failed"
-                detail = f"Would create: {result['created']}; Groups: {', '.join(result['groups_added']) or 'None'}"
+                detail = (
+                    f"Would create: {result['created']}; Groups added: {', '.join(result['groups_added']) or 'None'}; "
+                    f"Groups removed: {', '.join(result.get('groups_removed') or []) or 'None'}"
+                )
                 record(st.session_state.actor, "provision-test", email, st.session_state.selected_groups, status, detail)
-                output.append({"email": email, "status": status, "would_create": result["created"], "groups_to_add": "; ".join(result["groups_added"]), "details": detail})
+                output.append({
+                    "email": email, "status": status, "would_create": result["created"],
+                    "groups_to_add": "; ".join(result["groups_added"]),
+                    "groups_to_remove": "; ".join(result.get("groups_removed") or []),
+                    "details": detail,
+                })
             except Exception as exc:
                 record(st.session_state.actor, "provision-test", email, st.session_state.selected_groups, "Failed", str(exc))
-                output.append({"email": email, "status": "Failed", "would_create": False, "groups_to_add": "", "details": str(exc)})
+                output.append({"email": email, "status": "Failed", "would_create": False, "groups_to_add": "", "groups_to_remove": "", "details": str(exc)})
         result_df = pd.DataFrame(output)
         st.dataframe(result_df, width='stretch', hide_index=True)
         st.download_button("Download results", safe_csv(result_df), "provision-test-results.csv", "text/csv")
@@ -367,8 +436,9 @@ def _render_step_review() -> None:
         st.warning(
             f"⚠️ Live write mode is enabled. You are about to:\n\n"
             f"- **Create {to_create} user(s)**\n"
-            f"- **Add {summary['assignments']} group assignment(s)**\n\n"
-            f"This makes real changes in Adobe. Running the same request again is safe — "
+            f"- **Add {summary['assignments']} group assignment(s)**\n"
+            + (f"- **Remove {summary['removals']} group assignment(s)**\n" if summary["removals"] else "")
+            + f"\nThis makes real changes in Adobe. Running the same request again is safe — "
             f"only missing changes are applied."
         )
         execute_confirm = st.checkbox(
@@ -381,7 +451,7 @@ def _render_step_review() -> None:
         ):
             started_at = datetime.now(timezone.utc).isoformat()
             with st.spinner("Executing — this makes real changes in Adobe..."):
-                results = execute(st.session_state.users, st.session_state.selected_groups, test_only=False)
+                results = execute(st.session_state.users, st.session_state.selected_groups, test_only=False, groups_to_remove=groups_to_remove)
             completed_at = datetime.now(timezone.utc).isoformat()
             exec_summary = execution_summary(results)
             execution_id = save_execution(
@@ -397,6 +467,7 @@ def _render_step_review() -> None:
             for _, row in results.iterrows():
                 detail = (
                     f"Created: {row['created']}; Groups added: {', '.join(row['groups_added']) or 'None'}; "
+                    f"Groups removed: {', '.join(row.get('groups_removed') or []) or 'None'}; "
                     f"Retries: {row['retries']}" if row["success"] else str(row["error"])
                 )
                 record(
@@ -404,16 +475,18 @@ def _render_step_review() -> None:
                     st.session_state.selected_groups, "Success" if row["success"] else "Failed", detail,
                 )
             st.success(f"Execution #{execution_id} complete.")
-            e1, e2, e3, e4, e5, e6 = st.columns(6)
+            e1, e2, e3, e4, e5, e6, e7 = st.columns(7)
             e1.metric("Created", exec_summary["created"])
             e2.metric("Existing", exec_summary["existing"])
             e3.metric("Groups added", exec_summary["groups_added"])
             e4.metric("Already assigned", exec_summary["already_assigned"])
-            e5.metric("Failed", exec_summary["failed"])
-            e6.metric("Retries", exec_summary["retries"])
+            e5.metric("Groups removed", exec_summary["groups_removed"])
+            e6.metric("Failed", exec_summary["failed"])
+            e7.metric("Retries", exec_summary["retries"])
             display_results = results.drop(columns=["adobe_response"], errors="ignore").copy()
             display_results["groups_added"] = display_results["groups_added"].apply(lambda v: "; ".join(v) or "None")
             display_results["already_assigned"] = display_results["already_assigned"].apply(lambda v: "; ".join(v) or "None")
+            display_results["groups_removed"] = display_results["groups_removed"].apply(lambda v: "; ".join(v) or "None")
             st.dataframe(display_results, width='stretch', hide_index=True)
             with st.expander("Adobe response detail (per user)"):
                 with st.container(height=300):
