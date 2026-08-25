@@ -25,6 +25,7 @@ DEFAULT_STATE = {
     "actor": "local.user@example.com",
     "users": pd.DataFrame(),
     "selected_groups": [],
+    "selected_groups_to_remove": [],
     "preview": pd.DataFrame(),
     "provision_step": 1,
     "user_search_result": None,
@@ -97,11 +98,13 @@ def render_hero() -> None:
 def reset_provisioning() -> None:
     st.session_state.users = pd.DataFrame()
     st.session_state.selected_groups = []
+    st.session_state.selected_groups_to_remove = []
     st.session_state.preview = pd.DataFrame()
     st.session_state.provision_step = 1
     st.session_state.validation_checked = False
     st.session_state.last_request_id = None
     reset_group_picker("provision")
+    reset_group_picker("provision_remove")
 
 
 def parse_iso(value: str | None) -> datetime | None:
@@ -121,6 +124,7 @@ def reuse_request(request_id: int) -> None:
         return
     st.session_state.users = pd.DataFrame(request["users"])
     st.session_state.selected_groups = list(request["groups"])
+    st.session_state.selected_groups_to_remove = []
     st.session_state.preview = pd.DataFrame()
     st.session_state.provision_step = 2
     st.session_state.validation_checked = False
@@ -132,6 +136,7 @@ def reuse_request(request_id: int) -> None:
     # instead of this request's groups, and could even crash if a stale system
     # filter excludes one of them from the current options.
     reset_group_picker("provision")
+    reset_group_picker("provision_remove")
 
 
 def render_friendly_error(exc: Exception, *, key: str, context: str = "") -> bool:

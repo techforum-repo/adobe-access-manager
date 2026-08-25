@@ -27,6 +27,7 @@ def test_preview_summary_counts_assignments() -> None:
         "new": 1,
         "assignments": 3,
         "already": 1,
+        "removals": 0,
         "failures": 0,
     }
 

@@ -49,7 +49,8 @@ def build_user_table(emails: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def preview(users: pd.DataFrame, groups: list[str]) -> pd.DataFrame:
+def preview(users: pd.DataFrame, groups: list[str], groups_to_remove: list[str] | None = None) -> pd.DataFrame:
+    groups_to_remove = groups_to_remove or []
     rows: list[dict[str, Any]] = []
     included = users[users["include"] == True]  # noqa: E712
     for _, row in included.iterrows():
@@ -59,6 +60,7 @@ def preview(users: pd.DataFrame, groups: list[str]) -> pd.DataFrame:
             current = set(existing.get("groups", set())) if existing else set()
             missing = [g for g in groups if g not in current]
             already = sorted(current.intersection(groups))
+            to_remove = sorted(current.intersection(groups_to_remove))
             rows.append({
                 "email": email,
                 "name": f"{row.get('first_name','')} {row.get('last_name','')}".strip(),
@@ -67,7 +69,8 @@ def preview(users: pd.DataFrame, groups: list[str]) -> pd.DataFrame:
                 "current_groups": "; ".join(sorted(current)) or "None",
                 "groups_to_add": "; ".join(missing) or "None",
                 "already_assigned": "; ".join(already) or "None",
-                "ready": bool(missing or not existing),
+                "groups_to_remove": "; ".join(to_remove) or "None",
+                "ready": bool(missing or to_remove or not existing),
                 "lookup": "OK",
             })
         except Exception as exc:
@@ -79,6 +82,7 @@ def preview(users: pd.DataFrame, groups: list[str]) -> pd.DataFrame:
                 "current_groups": "Not evaluated",
                 "groups_to_add": "Not evaluated",
                 "already_assigned": "Not evaluated",
+                "groups_to_remove": "Not evaluated",
                 "ready": False,
                 "lookup": str(exc),
             })
@@ -132,17 +136,21 @@ def validate_users_against_adobe(users: pd.DataFrame) -> pd.DataFrame:
 
 def preview_summary(preview_df: pd.DataFrame) -> dict[str, int]:
     if preview_df.empty:
-        return {"users": 0, "existing": 0, "new": 0, "assignments": 0, "already": 0, "failures": 0}
+        return {"users": 0, "existing": 0, "new": 0, "assignments": 0, "already": 0, "removals": 0, "failures": 0}
     existing = int(preview_df.get("exists", pd.Series(dtype=bool)).fillna(False).sum())
     users = len(preview_df)
     assignments = 0
     already = 0
+    removals = 0
     for value in preview_df.get("groups_to_add", pd.Series(dtype=str)).fillna(""):
         if value and value != "None" and value != "Not evaluated":
             assignments += len([item for item in str(value).split(";") if item.strip()])
     for value in preview_df.get("already_assigned", pd.Series(dtype=str)).fillna(""):
         if value and value != "None" and value != "Not evaluated":
             already += len([item for item in str(value).split(";") if item.strip()])
+    for value in preview_df.get("groups_to_remove", pd.Series(dtype=str)).fillna(""):
+        if value and value != "None" and value != "Not evaluated":
+            removals += len([item for item in str(value).split(";") if item.strip()])
     failures = int((preview_df.get("lookup", pd.Series(dtype=str)) != "OK").sum())
     return {
         "users": users,
@@ -150,6 +158,7 @@ def preview_summary(preview_df: pd.DataFrame) -> dict[str, int]:
         "new": users - existing - failures,
         "assignments": assignments,
         "already": already,
+        "removals": removals,
         "failures": failures,
     }
 
@@ -171,18 +180,21 @@ def _format_adobe_errors(raw: Any) -> str:
     return "; ".join(parts)
 
 
-def execute(users: pd.DataFrame, groups: list[str], test_only: bool) -> pd.DataFrame:
+def execute(users: pd.DataFrame, groups: list[str], test_only: bool, groups_to_remove: list[str] | None = None) -> pd.DataFrame:
     """Run real (or test-mode) Adobe provisioning for included, ready users.
 
     Idempotent by construction: each attempt re-reads the user's current Adobe
     groups (via client.get_user inside client.provision) and only adds what's
-    missing, so re-running the same request never creates duplicate users or
-    duplicate group assignments — it just finds everything already assigned.
+    missing (and only removes groups the user actually still holds), so
+    re-running the same request never creates duplicate users, duplicate group
+    assignments, or a failed removal of something already gone — it just finds
+    everything already in the desired state.
 
     Transient failures (timeout, 429, 5xx, connection) are retried with
     exponential backoff via `retry.call_with_retry`. Permanent failures
     (invalid email, permission denied, an Adobe-rejected group) are not.
     """
+    groups_to_remove = groups_to_remove or []
     rows: list[dict[str, Any]] = []
     included = users[users["include"] == True]  # noqa: E712
     for _, row in included.iterrows():
@@ -191,13 +203,13 @@ def execute(users: pd.DataFrame, groups: list[str], test_only: bool) -> pd.DataF
         last_name = str(row.get("last_name", ""))
 
         def attempt(email=email, first_name=first_name, last_name=last_name) -> dict[str, Any]:
-            return run(client.provision(email, first_name, last_name, groups, test_only=test_only))
+            return run(client.provision(email, first_name, last_name, groups, test_only=test_only, groups_to_remove=groups_to_remove))
 
         outcome = call_with_retry(attempt)
         if not outcome.success:
             rows.append({
                 "email": email, "success": False, "created": False,
-                "groups_added": [], "already_assigned": [],
+                "groups_added": [], "already_assigned": [], "groups_removed": [],
                 "retries": outcome.retries, "error": outcome.last_error, "adobe_response": {},
             })
             continue
@@ -206,17 +218,18 @@ def execute(users: pd.DataFrame, groups: list[str], test_only: bool) -> pd.DataF
         if not result.get("success", True):
             rows.append({
                 "email": email, "success": False, "created": False,
-                "groups_added": [], "already_assigned": [],
+                "groups_added": [], "already_assigned": [], "groups_removed": [],
                 "retries": outcome.retries, "error": _format_adobe_errors(result.get("raw")),
                 "adobe_response": result.get("raw") or {},
             })
             continue
 
         missing = list(result.get("groups_added") or [])
+        removed = list(result.get("groups_removed") or [])
         already = [g for g in groups if g not in missing]
         rows.append({
             "email": email, "success": True, "created": bool(result.get("created")),
-            "groups_added": missing, "already_assigned": already,
+            "groups_added": missing, "already_assigned": already, "groups_removed": removed,
             "retries": outcome.retries, "error": "", "adobe_response": result.get("raw") or {},
         })
     return pd.DataFrame(rows)
@@ -224,13 +237,14 @@ def execute(users: pd.DataFrame, groups: list[str], test_only: bool) -> pd.DataF
 
 def execution_summary(results: pd.DataFrame) -> dict[str, int]:
     if results.empty:
-        return {"created": 0, "existing": 0, "groups_added": 0, "already_assigned": 0, "failed": 0, "retries": 0}
+        return {"created": 0, "existing": 0, "groups_added": 0, "already_assigned": 0, "groups_removed": 0, "failed": 0, "retries": 0}
     succeeded = results[results["success"]]
     return {
         "created": int(succeeded["created"].sum()) if not succeeded.empty else 0,
         "existing": int((~succeeded["created"]).sum()) if not succeeded.empty else 0,
         "groups_added": int(succeeded["groups_added"].apply(len).sum()) if not succeeded.empty else 0,
         "already_assigned": int(succeeded["already_assigned"].apply(len).sum()) if not succeeded.empty else 0,
+        "groups_removed": int(succeeded["groups_removed"].apply(len).sum()) if not succeeded.empty and "groups_removed" in succeeded else 0,
         "failed": int((~results["success"]).sum()),
         "retries": int(results["retries"].sum()),
     }

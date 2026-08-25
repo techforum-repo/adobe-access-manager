@@ -222,17 +222,19 @@ class MockAdobeClient:
     async def get_user(self, email: str) -> dict[str, Any] | None:
         return self.users.get(email.lower())
 
-    async def provision(self, email: str, first_name: str, last_name: str, groups: list[str], test_only: bool) -> dict[str, Any]:
+    async def provision(self, email: str, first_name: str, last_name: str, groups: list[str], test_only: bool, groups_to_remove: list[str] | None = None) -> dict[str, Any]:
         existing = self.users.get(email.lower())
         missing = [g for g in groups if not existing or g not in existing["groups"]]
+        present_to_remove = [g for g in (groups_to_remove or []) if existing and g in existing["groups"]]
         will_create = not bool(existing)
         if test_only:
-            return {"success": True, "test_only": True, "created": will_create, "groups_added": missing, "raw": {}}
+            return {"success": True, "test_only": True, "created": will_create, "groups_added": missing, "groups_removed": present_to_remove, "raw": {}}
         if not existing:
             existing = {"email": email.lower(), "first_name": first_name, "last_name": last_name, "identity_type": "federatedID", "status": "active", "groups": set()}
             self.users[email.lower()] = existing
         existing["groups"].update(missing)
-        return {"success": True, "test_only": False, "created": will_create, "groups_added": missing, "raw": {}}
+        existing["groups"].difference_update(present_to_remove)
+        return {"success": True, "test_only": False, "created": will_create, "groups_added": missing, "groups_removed": present_to_remove, "raw": {}}
 
 
 class AdobeUMAPIClient:
@@ -357,12 +359,17 @@ class AdobeUMAPIClient:
             data = await self._request(http, "GET", url)
         return normalize_user(data) if isinstance(data, dict) and data else None
 
-    async def provision(self, email: str, first_name: str, last_name: str, groups: list[str], test_only: bool) -> dict[str, Any]:
+    async def provision(self, email: str, first_name: str, last_name: str, groups: list[str], test_only: bool, groups_to_remove: list[str] | None = None) -> dict[str, Any]:
         if not test_only and not settings.adobe_write_enabled:
             raise RuntimeError("Live writes are disabled. Set ADOBE_WRITE_ENABLED=true only after validating test mode.")
         existing = await self.get_user(email)
         current = existing["groups"] if existing else set()
         missing = [g for g in groups if g not in current]
+        # Only groups the user actually holds are sent as a remove step — asking
+        # Adobe to remove a group that was never assigned is a no-op there, but
+        # reporting it back as "removed" here would be misleading in the preview
+        # and execution summaries.
+        present_to_remove = [g for g in (groups_to_remove or []) if g in current]
         steps: list[dict[str, Any]] = []
         if not existing:
             action = {"email": email, "country": default_country().upper(), "firstname": first_name, "lastname": last_name, "option": "ignoreIfAlreadyExists"}
@@ -371,14 +378,16 @@ class AdobeUMAPIClient:
             steps.append({key: action})
         if missing:
             steps.append({"add": {"group": missing}})
+        if present_to_remove:
+            steps.append({"remove": {"group": present_to_remove}})
         if not steps:
-            return {"success": True, "test_only": test_only, "created": False, "groups_added": [], "raw": {"message": "No changes"}}
+            return {"success": True, "test_only": test_only, "created": False, "groups_added": [], "groups_removed": [], "raw": {"message": "No changes"}}
         command = [{"user": email, "requestID": str(uuid.uuid4()), "do": steps}]
         url = f"{settings.adobe_umapi_base_url}/action/{quote(settings.adobe_org_id, safe='@')}?testOnly={'true' if test_only else 'false'}"
         async with self._new_http_client() as http:
             raw = await self._request(http, "POST", url, json=command)
         errors = raw.get("errors", []) if isinstance(raw, dict) else []
-        return {"success": not bool(errors), "test_only": test_only, "created": not bool(existing), "groups_added": missing, "raw": raw}
+        return {"success": not bool(errors), "test_only": test_only, "created": not bool(existing), "groups_added": missing, "groups_removed": present_to_remove, "raw": raw}
 
 
 client = MockAdobeClient() if settings.mock_adobe else AdobeUMAPIClient()

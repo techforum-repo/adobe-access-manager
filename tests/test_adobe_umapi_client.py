@@ -157,6 +157,36 @@ def test_provision_creates_a_new_user_and_adds_groups(configured, monkeypatch):
     assert result["groups_added"] == ["AEM-PROD-AUTHORS"]
 
 
+def test_provision_sends_a_remove_step_for_a_group_the_user_currently_holds(configured, monkeypatch):
+    sent_commands = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/token":
+            return _token_response()
+        if request.method == "GET":
+            return httpx.Response(200, json={
+                "email": "jane.doe@example.com", "type": "federatedID", "status": "active",
+                "groups": ["AEM-PROD-AUTHORS", "AEP-DATA-ENGINEERS"],
+            })
+        assert request.method == "POST"
+        sent_commands.append(request.content)
+        return httpx.Response(200, json={"errors": []})
+
+    _install_transport(monkeypatch, handler)
+    client = AdobeUMAPIClient()
+    result = run(client.provision(
+        "jane.doe@example.com", "Jane", "Doe", [], test_only=False,
+        groups_to_remove=["AEM-PROD-AUTHORS", "GROUP-NEVER-HELD"],
+    ))
+    assert result["success"] is True
+    # Only the group actually held is reported removed — a group the user was
+    # never in is silently dropped, not sent to Adobe or reported as removed.
+    assert result["groups_removed"] == ["AEM-PROD-AUTHORS"]
+    import json as _json
+    sent_body = _json.loads(sent_commands[0])
+    assert sent_body[0]["do"] == [{"remove": {"group": ["AEM-PROD-AUTHORS"]}}]
+
+
 def test_a_generic_httpx_failure_is_normalized_to_a_runtime_error(configured, monkeypatch):
     """Regression: previously only ConnectError/TimeoutException/HTTPStatusError
     were caught — a ProtocolError (or similar) reached the UI as a raw httpx
