@@ -26,7 +26,7 @@ DEFAULT_STATE = {
     "users": pd.DataFrame(),
     "selected_groups": [],
     "selected_groups_to_remove": [],
-    "remove_candidate_counts": {},
+    "remove_candidates_by_user": {},
     "remove_candidates_for_emails": [],
     "remove_candidates_loaded": False,
     "preview": pd.DataFrame(),
@@ -102,7 +102,7 @@ def reset_provisioning() -> None:
     st.session_state.users = pd.DataFrame()
     st.session_state.selected_groups = []
     st.session_state.selected_groups_to_remove = []
-    st.session_state.remove_candidate_counts = {}
+    st.session_state.remove_candidates_by_user = {}
     st.session_state.remove_candidates_for_emails = []
     st.session_state.remove_candidates_loaded = False
     st.session_state.preview = pd.DataFrame()
@@ -130,7 +130,7 @@ def reuse_request(request_id: int) -> None:
     st.session_state.users = pd.DataFrame(request["users"])
     st.session_state.selected_groups = list(request["groups"])
     st.session_state.selected_groups_to_remove = []
-    st.session_state.remove_candidate_counts = {}
+    st.session_state.remove_candidates_by_user = {}
     st.session_state.remove_candidates_for_emails = []
     st.session_state.remove_candidates_loaded = False
     st.session_state.preview = pd.DataFrame()

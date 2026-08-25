@@ -4,7 +4,13 @@ import pandas as pd
 import pytest
 
 from adobe_access import database, provisioning
-from adobe_access.provisioning import build_user_table, execute, execution_summary, extract_emails_from_first_column
+from adobe_access.provisioning import (
+    build_user_table,
+    current_groups_by_user,
+    execute,
+    execution_summary,
+    extract_emails_from_first_column,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -136,6 +142,27 @@ def test_execute_does_not_retry_permanent_failure(monkeypatch):
     assert bool(row["success"]) is False
     assert calls["n"] == 1
     assert "403" in row["error"] or "forbidden" in row["error"].lower()
+
+
+def test_current_groups_by_user_keeps_each_users_groups_separate():
+    """Bulk-pasted/uploaded users commonly hold different groups from each
+    other — this must return a per-email breakdown, not a flattened union
+    that hides who actually has what."""
+    provisioning.client.users["second.user@example.com"] = {
+        "email": "second.user@example.com", "first_name": "Second", "last_name": "User",
+        "identity_type": "federatedID", "status": "active", "groups": {"AEP-DATA-ENGINEERS"},
+    }
+    users = build_user_table(["existing.user@example.com", "second.user@example.com"])
+    by_user = current_groups_by_user(users)
+    assert by_user == {
+        "existing.user@example.com": {"AEM-PROD-AUTHORS"},
+        "second.user@example.com": {"AEP-DATA-ENGINEERS"},
+    }
+
+
+def test_current_groups_by_user_excludes_a_brand_new_user():
+    users = build_user_table(["new.person@example.com"])
+    assert current_groups_by_user(users) == {}
 
 
 def test_execute_removes_a_group_the_user_currently_holds():
