@@ -275,6 +275,12 @@ def _render_step_access() -> None:
             st.session_state.remove_candidates_by_user = current_groups_by_user(st.session_state.users)
         st.session_state.remove_candidates_for_emails = included_emails
         st.session_state.remove_candidates_loaded = True
+        # The detail selectbox is keyed, so its stored value survives reruns —
+        # without clearing it, reloading against a different set of users could
+        # leave it pointing at an email no longer in `included_emails`, which
+        # Streamlit rejects outright.
+        st.session_state.pop("provision_remove_detail_email", None)
+        st.session_state.pop("provision_remove_detail_filter", None)
         st.rerun()
 
     if not st.session_state.remove_candidates_loaded:
@@ -318,9 +324,46 @@ def _render_step_access() -> None:
                 st.toast(f"Added {len(remove_candidates)} group(s) to the removal list.")
                 st.rerun()
             with st.expander(f"Which of the {total} selected user(s) hold what"):
-                for email in st.session_state.remove_candidates_for_emails:
-                    held = sorted(by_user.get(email, set()))
-                    st.write(f"**{email}** — {', '.join(held) if held else '_no custom user groups_'}")
+                # A plain "email — g1, g2, g3, ..." line breaks down once a user
+                # has 100+ groups (one unreadable run-on line) — an overview
+                # table plus a searchable per-user detail view scales to that.
+                overview = pd.DataFrame([
+                    {"Email": email, "Custom groups": len(by_user.get(email, set()))}
+                    for email in st.session_state.remove_candidates_for_emails
+                ]).sort_values("Custom groups", ascending=False)
+                st.dataframe(overview, width='stretch', hide_index=True)
+
+                detail_email = st.selectbox(
+                    "View full group list for",
+                    st.session_state.remove_candidates_for_emails,
+                    key="provision_remove_detail_email",
+                )
+                held = sorted(by_user.get(detail_email, set()))
+                if not held:
+                    st.caption(f"{detail_email} holds no custom user groups.")
+                else:
+                    detail_query = st.text_input(
+                        "Filter this user's groups", key="provision_remove_detail_filter",
+                        placeholder="Search by name...",
+                    )
+                    detail_rows = pd.DataFrame([
+                        {
+                            "Display name": catalog_lookup.get(name.casefold(), {}).get("display_name", name),
+                            "System": catalog_lookup.get(name.casefold(), {}).get("system", "Other"),
+                            "Adobe user group": name,
+                        }
+                        for name in held
+                    ])
+                    if detail_query:
+                        detail_rows = detail_rows[
+                            detail_rows["Display name"].str.contains(detail_query, case=False, na=False)
+                            | detail_rows["Adobe user group"].str.contains(detail_query, case=False, na=False)
+                        ]
+                    st.caption(
+                        f"{len(held)} custom group(s) total"
+                        + (f" — {len(detail_rows)} matching filter" if detail_query else "")
+                    )
+                    st.dataframe(detail_rows, width='stretch', hide_index=True)
 
     st.divider()
     st.markdown("###### Selected groups (will be added)")

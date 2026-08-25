@@ -237,6 +237,67 @@ def test_removing_a_selected_group_takes_it_out_of_the_selection(temp_db):
     assert len(at.session_state["selected_groups"]) == 1
 
 
+def test_remove_groups_picker_loads_per_user_and_supports_a_heavy_user(temp_db):
+    """The removal picker's source data must stay per-user (not a flattened
+    union) even when one user holds far more groups than another — and the
+    per-user detail view (added for users with 100+ groups) must render and
+    filter without error."""
+    from adobe_access import provisioning
+
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=30)
+    _sync_groups(at)
+
+    heavy_groups = {f"BULK-GROUP-{i:03d}" for i in range(15)}
+    provisioning.client.users["heavy.user@example.com"] = {
+        "email": "heavy.user@example.com", "first_name": "Heavy", "last_name": "User",
+        "identity_type": "federatedID", "status": "active", "groups": heavy_groups,
+    }
+    provisioning.client.users["light.user@example.com"] = {
+        "email": "light.user@example.com", "first_name": "Light", "last_name": "User",
+        "identity_type": "federatedID", "status": "active", "groups": {"BULK-GROUP-000"},
+    }
+
+    _goto(at, "Provision access")
+    at.text_area[0].set_value("heavy.user@example.com\nlight.user@example.com").run(timeout=30)
+    [b for b in at.button if b.label == "Validate and continue"][0].click().run(timeout=30)
+    [b for b in at.button if b.label == "Continue to access"][0].click().run(timeout=30)
+
+    [b for b in at.button if b.label == "Load current groups for selected users"][0].click().run(timeout=30)
+    assert not at.exception
+    assert at.session_state["remove_candidates_by_user"] == {
+        "heavy.user@example.com": heavy_groups,
+        "light.user@example.com": {"BULK-GROUP-000"},
+    }
+
+    # The union multiselect must offer every group from both users (options are
+    # shown through format_func as "name · system · held by N/M", so match by
+    # containment rather than an exact set).
+    picker = [w for w in at.multiselect if w.label == "Groups currently held by selected users"][0]
+    expected_names = heavy_groups | {"BULK-GROUP-000"}
+    assert len(picker.options) == len(expected_names)
+    for name in expected_names:
+        assert any(name in option for option in picker.options), f"{name} missing from removal picker options"
+
+    # Selecting one user's detail view and filtering it must not error, even
+    # with 15 groups loaded for that user.
+    detail = [w for w in at.selectbox if w.key == "provision_remove_detail_email"][0]
+    detail.set_value("heavy.user@example.com").run(timeout=30)
+    assert not at.exception
+    filter_box = [w for w in at.text_input if w.key == "provision_remove_detail_filter"][0]
+    filter_box.set_value("BULK-GROUP-00").run(timeout=30)
+    assert not at.exception
+
+    # Picking a group and adding it to the removal list still works end to end.
+    picker.set_value(["BULK-GROUP-000"]).run(timeout=30)
+    [b for b in at.button if b.label == "Add to removal list"][0].click().run(timeout=30)
+    assert not at.exception
+    assert at.session_state["selected_groups_to_remove"] == ["BULK-GROUP-000"]
+
+    provisioning.client.users.pop("heavy.user@example.com", None)
+    provisioning.client.users.pop("light.user@example.com", None)
+
+
 def test_add_selected_favorites_is_disabled_until_something_is_picked(temp_db):
     """Reported bug: clicking "Add selected favorites" with nothing picked in
     the "Quick add favorites" box was a silent no-op — no warning, nothing
