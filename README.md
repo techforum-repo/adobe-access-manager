@@ -202,11 +202,14 @@ corporate proxy is slow).
   recent requests and activity, favorite groups, most-used templates. Never
   calls Adobe itself.
 - **Provision access** — the 4-step wizard (Users → Validate → Access → Review). The Access
-  step supports both directions: add groups (template, favorites, or search) and mark groups
-  for removal (its own search picker) — a group in both lists is added, not removed, and the
-  UI flags the conflict. Removal only ever affects a selected user who currently holds that
-  group; it's a no-op for anyone who doesn't. Review always offers "Run test" (Adobe
-  `testOnly=true`, never writes). When `ADOBE_WRITE_ENABLED=true`, it also offers **Execute** —
+  step supports both directions: add groups (template, favorites, or search) against the full
+  group catalog, and mark groups for removal — the removal picker is sourced from a live
+  "load current groups" lookup across the selected users, not the full catalog, so you pick
+  from what they actually hold (labeled with how many of the selected users hold each). A
+  group in both the add and removal lists is added, not removed, and the UI flags the
+  conflict. Removal only ever affects a selected user who currently holds that group; it's a
+  no-op for anyone who doesn't. Review always offers "Run test" (Adobe `testOnly=true`, never
+  writes). When `ADOBE_WRITE_ENABLED=true`, it also offers **Execute** —
   gated by a confirmation dialog, idempotent, retried with backoff on transient failures, and
   fully logged (see "Production readiness checklist").
 - **User search** — two tabs. "Search Adobe" does a live, exact-email lookup (always

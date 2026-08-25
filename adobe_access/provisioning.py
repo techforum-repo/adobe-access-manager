@@ -49,6 +49,31 @@ def build_user_table(emails: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def current_groups_across_users(users: pd.DataFrame) -> dict[str, int]:
+    """Live-fetch each included user's current Adobe groups and return the union,
+    each mapped to how many of the users hold it.
+
+    This is the source list for the Provision wizard's "Remove groups" picker —
+    letting an admin pick from what's actually assigned to the selected users,
+    instead of the full group catalog (where picking a group nobody has would
+    silently be a no-op). A lookup failure for one user just excludes them from
+    the counts rather than failing the whole thing — the same user will still
+    surface as a lookup failure in Build preview.
+    """
+    counts: dict[str, int] = {}
+    included = users[users["include"] == True]  # noqa: E712
+    for _, row in included.iterrows():
+        try:
+            existing = run(client.get_user(str(row["email"])))
+        except Exception:
+            continue
+        if not existing:
+            continue
+        for group in existing.get("groups", set()):
+            counts[group] = counts.get(group, 0) + 1
+    return counts
+
+
 def preview(users: pd.DataFrame, groups: list[str], groups_to_remove: list[str] | None = None) -> pd.DataFrame:
     groups_to_remove = groups_to_remove or []
     rows: list[dict[str, Any]] = []
