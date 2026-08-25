@@ -209,7 +209,9 @@ corporate proxy is slow).
   list commonly has different existing groups per person. The removal picker reflects that:
   it's sourced from a live "load current groups" lookup across the selected users rather than
   the full catalog, labeled with how many of them hold each group, plus an expandable
-  per-user breakdown so it's never assumed they're uniform. A group in both the add and
+  breakdown — a sortable per-user group-count overview, and a searchable detail table for any
+  one user's full list — so it's never assumed they're uniform and stays usable even for a
+  user with 100+ groups. A group in both the add and
   removal lists is added, not removed, and the UI flags the conflict. Removal only ever affects a
   selected user who currently holds that group; it's a
   no-op for anyone who doesn't. Review always offers "Run test" (Adobe `testOnly=true`, never
