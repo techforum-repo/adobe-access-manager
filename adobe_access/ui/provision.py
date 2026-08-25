@@ -18,6 +18,7 @@ from adobe_access.database import (
 )
 from adobe_access.provisioning import (
     build_user_table,
+    current_groups_across_users,
     execute,
     execution_summary,
     extract_emails_from_first_column,
@@ -259,16 +260,49 @@ def _render_step_access() -> None:
         st.rerun()
 
     st.markdown("###### 4. Remove groups")
-    st.caption(
-        "Applies to any selected user who currently holds the group — users who don't have it are "
-        "unaffected. A group listed here is dropped from removal if it's also in Selected groups above."
-    )
-    remove_candidates = group_picker(groups, "provision_remove", [])
-    if st.button("Add to removal list", disabled=not remove_candidates):
-        st.session_state.selected_groups_to_remove = list(dict.fromkeys(st.session_state.selected_groups_to_remove + remove_candidates))
-        reset_group_picker("provision_remove")
-        st.toast(f"Added {len(remove_candidates)} group(s) to the removal list.")
+    included_emails = sorted(
+        st.session_state.users[st.session_state.users["include"] == True]["email"].astype(str).tolist()  # noqa: E712
+    ) if "email" in st.session_state.users.columns else []
+    stale = bool(st.session_state.remove_candidates_loaded) and st.session_state.remove_candidates_for_emails != included_emails
+    load_label = "Reload current groups for selected users" if st.session_state.remove_candidates_loaded else "Load current groups for selected users"
+    if st.button(load_label, disabled=not included_emails):
+        with st.spinner("Checking current group membership in Adobe..."):
+            st.session_state.remove_candidate_counts = current_groups_across_users(st.session_state.users)
+        st.session_state.remove_candidates_for_emails = included_emails
+        st.session_state.remove_candidates_loaded = True
         st.rerun()
+
+    if not st.session_state.remove_candidates_loaded:
+        st.caption("Load current groups to pick from what the selected users actually have — not the full group catalog.")
+    else:
+        if stale:
+            st.warning("The selected users changed since this list was loaded — reload to refresh it.")
+        candidate_names = sorted(st.session_state.remove_candidate_counts)
+        if not candidate_names:
+            st.info("None of the selected users currently hold any custom user groups.")
+        else:
+            total = len(st.session_state.remove_candidates_for_emails) or 1
+            # catalog_lookup.get(...) always returns something with .get() — either
+            # the matched row (a pandas Series, index-label lookup) or the {}
+            # fallback — never falsy-checked, since a non-empty Series' truthiness
+            # is ambiguous and would raise.
+            remove_labels = {
+                name: f"{catalog_lookup.get(name.casefold(), {}).get('display_name', name)} · "
+                f"{catalog_lookup.get(name.casefold(), {}).get('system', 'Other')} · "
+                f"held by {st.session_state.remove_candidate_counts[name]}/{total} selected user(s)"
+                for name in candidate_names
+            }
+            remove_candidates = st.multiselect(
+                "Groups currently held by selected users",
+                candidate_names,
+                format_func=lambda value: remove_labels.get(value, value),
+                key="provision_remove_selected",
+            )
+            if st.button("Add to removal list", disabled=not remove_candidates):
+                st.session_state.selected_groups_to_remove = list(dict.fromkeys(st.session_state.selected_groups_to_remove + remove_candidates))
+                st.session_state.pop("provision_remove_selected", None)
+                st.toast(f"Added {len(remove_candidates)} group(s) to the removal list.")
+                st.rerun()
 
     st.divider()
     st.markdown("###### Selected groups (will be added)")
