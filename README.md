@@ -202,13 +202,15 @@ corporate proxy is slow).
   recent requests and activity, favorite groups, most-used templates. Never
   calls Adobe itself.
 - **Provision access** — the 4-step wizard (Users → Validate → Access → Review). The Access
-  step supports both directions: add groups (template, favorites, or search) against the full
-  group catalog, and mark groups for removal — the removal picker is sourced from a live
-  "load current groups" lookup across the selected users, not the full catalog, so you pick
-  from what they actually hold (labeled with how many of the selected users hold each, plus
-  an expandable per-user breakdown — a bulk list commonly has different existing groups per
-  person, so the picker never assumes they're uniform). A group in both the add and removal
-  lists is added, not removed, and the UI flags the conflict. Removal only ever affects a
+  step supports both directions, and they're asymmetric by design: **add is global** — the
+  same group list (template, favorites, or search, against the full catalog) is applied to
+  every selected user — while **removal is inherently per user**, since which groups to
+  revoke depends entirely on what each person currently holds, and a bulk-pasted/uploaded
+  list commonly has different existing groups per person. The removal picker reflects that:
+  it's sourced from a live "load current groups" lookup across the selected users rather than
+  the full catalog, labeled with how many of them hold each group, plus an expandable
+  per-user breakdown so it's never assumed they're uniform. A group in both the add and
+  removal lists is added, not removed, and the UI flags the conflict. Removal only ever affects a
   selected user who currently holds that group; it's a
   no-op for anyone who doesn't. Review always offers "Run test" (Adobe `testOnly=true`, never
   writes). When `ADOBE_WRITE_ENABLED=true`, it also offers **Execute** —
