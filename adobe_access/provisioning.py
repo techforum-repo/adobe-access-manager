@@ -49,29 +49,32 @@ def build_user_table(emails: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def current_groups_across_users(users: pd.DataFrame) -> dict[str, int]:
-    """Live-fetch each included user's current Adobe groups and return the union,
-    each mapped to how many of the users hold it.
+def current_groups_by_user(users: pd.DataFrame) -> dict[str, set[str]]:
+    """Live-fetch each included user's current Adobe groups, per email.
 
-    This is the source list for the Provision wizard's "Remove groups" picker —
+    This is the source data for the Provision wizard's "Remove groups" picker —
     letting an admin pick from what's actually assigned to the selected users,
     instead of the full group catalog (where picking a group nobody has would
-    silently be a no-op). A lookup failure for one user just excludes them from
-    the counts rather than failing the whole thing — the same user will still
-    surface as a lookup failure in Build preview.
+    silently be a no-op). Kept per-user rather than pre-aggregated: a bulk list
+    of users pasted or uploaded together commonly has different existing
+    groups per person, and the UI needs to show that breakdown, not just a
+    flattened union, so an admin isn't guessing which of "3 of 5 users" a
+    given group actually belongs to. A lookup failure for one user just
+    excludes them here rather than failing the whole thing — the same user
+    will still surface as a lookup failure in Build preview.
     """
-    counts: dict[str, int] = {}
+    by_user: dict[str, set[str]] = {}
     included = users[users["include"] == True]  # noqa: E712
     for _, row in included.iterrows():
+        email = str(row["email"])
         try:
-            existing = run(client.get_user(str(row["email"])))
+            existing = run(client.get_user(email))
         except Exception:
             continue
         if not existing:
             continue
-        for group in existing.get("groups", set()):
-            counts[group] = counts.get(group, 0) + 1
-    return counts
+        by_user[email] = set(existing.get("groups", set()))
+    return by_user
 
 
 def preview(users: pd.DataFrame, groups: list[str], groups_to_remove: list[str] | None = None) -> pd.DataFrame:

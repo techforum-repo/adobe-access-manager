@@ -18,7 +18,7 @@ from adobe_access.database import (
 )
 from adobe_access.provisioning import (
     build_user_table,
-    current_groups_across_users,
+    current_groups_by_user,
     execute,
     execution_summary,
     extract_emails_from_first_column,
@@ -267,7 +267,7 @@ def _render_step_access() -> None:
     load_label = "Reload current groups for selected users" if st.session_state.remove_candidates_loaded else "Load current groups for selected users"
     if st.button(load_label, disabled=not included_emails):
         with st.spinner("Checking current group membership in Adobe..."):
-            st.session_state.remove_candidate_counts = current_groups_across_users(st.session_state.users)
+            st.session_state.remove_candidates_by_user = current_groups_by_user(st.session_state.users)
         st.session_state.remove_candidates_for_emails = included_emails
         st.session_state.remove_candidates_loaded = True
         st.rerun()
@@ -277,7 +277,16 @@ def _render_step_access() -> None:
     else:
         if stale:
             st.warning("The selected users changed since this list was loaded — reload to refresh it.")
-        candidate_names = sorted(st.session_state.remove_candidate_counts)
+        by_user: dict[str, set] = st.session_state.remove_candidates_by_user
+        # Users can (and often do) each hold a different set of groups when
+        # pasted/uploaded in bulk — this is a union across all of them for the
+        # picker, but the per-user breakdown below is what actually shows who
+        # has what, since "held by 3/5 users" alone doesn't say which 3.
+        counts: dict[str, int] = {}
+        for groups_held in by_user.values():
+            for name in groups_held:
+                counts[name] = counts.get(name, 0) + 1
+        candidate_names = sorted(counts)
         if not candidate_names:
             st.info("None of the selected users currently hold any custom user groups.")
         else:
@@ -289,7 +298,7 @@ def _render_step_access() -> None:
             remove_labels = {
                 name: f"{catalog_lookup.get(name.casefold(), {}).get('display_name', name)} · "
                 f"{catalog_lookup.get(name.casefold(), {}).get('system', 'Other')} · "
-                f"held by {st.session_state.remove_candidate_counts[name]}/{total} selected user(s)"
+                f"held by {counts[name]}/{total} selected user(s)"
                 for name in candidate_names
             }
             remove_candidates = st.multiselect(
@@ -303,6 +312,10 @@ def _render_step_access() -> None:
                 st.session_state.pop("provision_remove_selected", None)
                 st.toast(f"Added {len(remove_candidates)} group(s) to the removal list.")
                 st.rerun()
+            with st.expander(f"Which of the {total} selected user(s) hold what"):
+                for email in st.session_state.remove_candidates_for_emails:
+                    held = sorted(by_user.get(email, set()))
+                    st.write(f"**{email}** — {', '.join(held) if held else '_no custom user groups_'}")
 
     st.divider()
     st.markdown("###### Selected groups (will be added)")
