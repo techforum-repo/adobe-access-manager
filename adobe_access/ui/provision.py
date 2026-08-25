@@ -260,6 +260,11 @@ def _render_step_access() -> None:
         st.rerun()
 
     st.markdown("###### 4. Remove groups")
+    st.caption(
+        "Unlike Add above — which applies the same group list to every selected user — removal is "
+        "inherently per user: a group is only removed from someone who currently holds it, and left "
+        "alone for anyone who doesn't, even within the same batch."
+    )
     included_emails = sorted(
         st.session_state.users[st.session_state.users["include"] == True]["email"].astype(str).tolist()  # noqa: E712
     ) if "email" in st.session_state.users.columns else []
