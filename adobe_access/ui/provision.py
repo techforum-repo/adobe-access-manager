@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,6 +31,22 @@ from adobe_access.provisioning import (
 from adobe_access.templates import get_template, list_templates
 from adobe_access.ui.shared import group_catalog, group_picker, reset_group_picker, reset_provisioning
 from adobe_access.utils import safe_csv
+
+
+def _group_badge_html(name: str, catalog_lookup: dict) -> str:
+    """Render one group as a pill/badge span — the same `.badge` style already
+    used for the sidebar's Mock/Live indicator, chosen over a bordered card
+    per group (Templates/Review-step style) because it packs densely: a user
+    with 100+ groups would make one box per group an unreasonably long
+    scroll, where wrapped pills stay scannable in a fixed-height strip.
+    """
+    meta = catalog_lookup.get(name.casefold(), {})
+    display_name = meta.get("display_name", name) if hasattr(meta, "get") else name
+    privileged = bool(meta.get("privileged", False)) if hasattr(meta, "get") else False
+    css_class = "badge privileged" if privileged else "badge"
+    title = html.escape(name)
+    label = html.escape(str(display_name)) + (" ⚠️" if privileged else "")
+    return f"<span class='{css_class}' title=\"{title}\">{label}</span>"
 
 
 def _effective_groups_to_remove() -> list[str]:
@@ -363,7 +380,13 @@ def _render_step_access() -> None:
                         f"{len(held)} custom group(s) total"
                         + (f" — {len(detail_rows)} matching filter" if detail_query else "")
                     )
-                    st.dataframe(detail_rows, width='stretch', hide_index=True)
+                    if detail_rows.empty:
+                        st.caption("No groups match that filter.")
+                    else:
+                        badges_html = "".join(
+                            _group_badge_html(name, catalog_lookup) for name in detail_rows["Adobe user group"]
+                        )
+                        st.markdown(f"<div class='badge-row'>{badges_html}</div>", unsafe_allow_html=True)
 
     st.divider()
     st.markdown("###### Selected groups (will be added)")

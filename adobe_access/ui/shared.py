@@ -56,6 +56,9 @@ CUSTOM_CSS = """<style>
 .hero{padding:1.1rem 1.35rem;border:1px solid #ddd;border-radius:16px;margin-bottom:1rem}
 [data-testid=stMetric]{border:1px solid #ddd;padding:1rem;border-radius:14px}
 .badge{padding:.25rem .55rem;border:1px solid #ccc;border-radius:999px;font-size:.8rem}
+.badge-row{display:flex;flex-wrap:wrap;gap:.4rem;max-height:260px;overflow-y:auto;padding:.4rem 0}
+.badge-row .badge{background:rgba(127,127,127,.08)}
+.badge-row .badge.privileged{border-color:#d97706;color:#d97706}
 .step{padding:.6rem .8rem;border:1px solid #ddd;border-radius:10px;text-align:center;font-weight:600}
 </style>"""
 

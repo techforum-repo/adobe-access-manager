@@ -284,9 +284,18 @@ def test_remove_groups_picker_loads_per_user_and_supports_a_heavy_user(temp_db):
     detail = [w for w in at.selectbox if w.key == "provision_remove_detail_email"][0]
     detail.set_value("heavy.user@example.com").run(timeout=30)
     assert not at.exception
+
+    # The 15 groups render as a badge-row of pills, not a dataframe.
+    badge_markup = [m for m in at.markdown if "class='badge-row'" in m.value]
+    assert badge_markup, "expected the per-user group breakdown to render as badge pills"
+    assert all(f">{name}<" in badge_markup[0].value or f'"{name}"' in badge_markup[0].value for name in heavy_groups)
+
     filter_box = [w for w in at.text_input if w.key == "provision_remove_detail_filter"][0]
     filter_box.set_value("BULK-GROUP-00").run(timeout=30)
     assert not at.exception
+    # Filtering to a narrower prefix must shrink which badges render.
+    narrowed = [m for m in at.markdown if "class='badge-row'" in m.value][0]
+    assert "BULK-GROUP-010" not in narrowed.value and "BULK-GROUP-000" in narrowed.value
 
     # Picking a group and adding it to the removal list still works end to end.
     picker.set_value(["BULK-GROUP-000"]).run(timeout=30)
