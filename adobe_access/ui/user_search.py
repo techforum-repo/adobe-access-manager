@@ -22,7 +22,7 @@ from adobe_access.utils import safe_csv
 def render() -> None:
     st.subheader("User search")
     st.caption(
-        "Search Adobe directly for one exact email, or browse a locally synced "
+        "Search Adobe directly for one or more exact emails, or browse a locally synced "
         "directory (including a blank search) without hitting Adobe on every keystroke."
     )
 
@@ -56,50 +56,133 @@ def _render_sync_header() -> None:
     st.divider()
 
 
+def _parse_lookup_emails(raw: str) -> list[str]:
+    items = [item.strip().lower() for item in raw.replace(",", "\n").replace(";", "\n").splitlines() if item.strip()]
+    return list(dict.fromkeys(items))
+
+
 def _render_exact_search() -> None:
     with st.form("user_lookup_form", clear_on_submit=False):
-        lookup_email = st.text_input(
-            "User email",
+        lookup_text = st.text_area(
+            "User email(s)",
             value=st.session_state.user_search_email_value,
-            placeholder="firstname.lastname@example.com",
+            placeholder="firstname.lastname@example.com\nOne per line, or separated by comma/semicolon, to search several at once.",
+            height=100,
         )
         search_submitted = st.form_submit_button("Search Adobe", type="primary")
     search_submitted = search_submitted or st.session_state.pop("_retry_user_search", False)
 
     if search_submitted:
-        st.session_state.user_search_email_value = lookup_email.strip().lower()
-        try:
-            with st.spinner("Looking up the user in Adobe..."):
-                found_user = lookup_user(lookup_email)
-            st.session_state.user_search_result = found_user
-            record(
-                st.session_state.actor,
-                "user-lookup",
-                lookup_email.strip().lower(),
-                [],
-                "Found" if found_user else "Not found",
-                "Exact Adobe user lookup",
-            )
-        except UserLookupError as exc:
-            st.session_state.user_search_result = None
-            if render_friendly_error(exc, key="retry_user_search", context=f"While looking up {lookup_email.strip() or 'the user'}."):
+        st.session_state.user_search_email_value = lookup_text
+        emails = _parse_lookup_emails(lookup_text)
+        results: list[dict] = []
+        with st.spinner(f"Looking up {len(emails)} user(s) in Adobe..." if len(emails) > 1 else "Looking up the user in Adobe..."):
+            for email in emails:
+                try:
+                    found_user = lookup_user(email)
+                    results.append({"email": email, "user": found_user, "error": None})
+                    record(
+                        st.session_state.actor, "user-lookup", email, [],
+                        "Found" if found_user else "Not found", "Exact Adobe user lookup",
+                    )
+                except UserLookupError as exc:
+                    results.append({"email": email, "user": None, "error": str(exc)})
+                    record(st.session_state.actor, "user-lookup", email, [], "Failed", str(exc))
+        st.session_state.user_search_results = results
+        st.session_state.user_search_page = 1
+        if len(results) == 1 and results[0]["error"]:
+            error = UserLookupError(results[0]["error"])
+            if render_friendly_error(error, key="retry_user_search", context=f"While looking up {results[0]['email']}."):
                 st.session_state["_retry_user_search"] = True
                 st.rerun()
 
-    searched_email = st.session_state.user_search_email_value
-    user = st.session_state.user_search_result
-    if searched_email and user is None:
-        st.warning(f"No Adobe user was found for {searched_email}.")
+    results = st.session_state.user_search_results
+    if not results:
+        return
+
+    if len(results) == 1:
+        _render_single_result(results[0])
+    else:
+        _render_paginated_results(results)
+
+
+def _render_single_result(result: dict) -> None:
+    """The common case — one email searched — skips the summary/pager
+    entirely and goes straight to the detail view, same as before this page
+    supported multiple emails at once."""
+    if result["error"]:
+        return  # already surfaced via render_friendly_error() above
+    if result["user"] is None:
+        st.warning(f"No Adobe user was found for {result['email']}.")
         if st.button("Prepare as a new provisioning request", type="secondary"):
-            st.session_state.users = build_user_table([searched_email])
+            st.session_state.users = build_user_table([result["email"]])
+            st.session_state.selected_groups = []
+            st.session_state.preview = pd.DataFrame()
+            st.session_state.provision_step = 2
+            st.session_state.pending_navigation = "Provision access"
+            st.rerun()
+        return
+    _render_user_detail(result["user"], key_prefix="search")
+
+
+_PAGE_SIZE_OPTIONS = [10, 25, 50]
+
+
+def _render_paginated_results(results: list[dict]) -> None:
+    found = [r for r in results if r["user"] is not None]
+    not_found = [r for r in results if r["user"] is None and r["error"] is None]
+    failed = [r for r in results if r["error"]]
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Searched", len(results))
+    m2.metric("Found", len(found))
+    m3.metric("Not found", len(not_found))
+    m4.metric("Errors", len(failed))
+
+    if not_found:
+        if st.button(f"Prepare {len(not_found)} not-found user(s) as a new provisioning request", type="secondary"):
+            st.session_state.users = build_user_table([r["email"] for r in not_found])
             st.session_state.selected_groups = []
             st.session_state.preview = pd.DataFrame()
             st.session_state.provision_step = 2
             st.session_state.pending_navigation = "Provision access"
             st.rerun()
 
-    if user:
-        _render_user_detail(user, key_prefix="search")
+    page_size = st.selectbox("Results per page", _PAGE_SIZE_OPTIONS, key="user_search_page_size")
+    total_pages = max(1, -(-len(results) // page_size))
+    st.session_state.user_search_page = min(max(1, st.session_state.user_search_page), total_pages)
+    current_page = st.session_state.user_search_page
+
+    start = (current_page - 1) * page_size
+    page_results = results[start:start + page_size]
+
+    status_rows = [{
+        "Email": r["email"],
+        "Status": "Found" if r["user"] else ("Error" if r["error"] else "Not found"),
+        "Name": (r["user"] or {}).get("display_name", "") if r["user"] else "",
+        "Detail": r["error"] or "",
+    } for r in page_results]
+    st.dataframe(pd.DataFrame(status_rows), width='stretch', hide_index=True)
+
+    p1, p2, p3 = st.columns([1, 3, 1])
+    if p1.button("◀ Previous", disabled=current_page <= 1, key="user_search_prev_page"):
+        st.session_state.user_search_page -= 1
+        st.rerun()
+    p2.markdown(
+        f"<div style='text-align:center'>Page {current_page} of {total_pages} "
+        f"({len(results)} result(s) total)</div>",
+        unsafe_allow_html=True,
+    )
+    if p3.button("Next ▶", disabled=current_page >= total_pages, key="user_search_next_page"):
+        st.session_state.user_search_page += 1
+        st.rerun()
+
+    page_found_emails = [r["email"] for r in page_results if r["user"] is not None]
+    if page_found_emails:
+        st.markdown("##### View details")
+        selected_email = st.selectbox("Pick a found user", page_found_emails, key="user_search_detail_email")
+        selected = next(r for r in page_results if r["email"] == selected_email)
+        _render_user_detail(selected["user"], key_prefix=f"search_{selected_email}")
 
 
 def _render_browse_cached() -> None:
