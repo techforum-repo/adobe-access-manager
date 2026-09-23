@@ -43,6 +43,18 @@ def test_build_user_table_excludes_a_non_firstname_lastname_email():
     assert "firstname.lastname" in row["notes"]
 
 
+def test_build_user_table_appends_project_name_to_last_name():
+    users = build_user_table(["john.doe@example.com"], "ProjectX")
+    row = users.iloc[0]
+    assert row["last_name"] == "Doe(ProjectX)"
+    assert row["first_name"] == "John"
+
+
+def test_build_user_table_without_project_name_leaves_last_name_untouched():
+    users = build_user_table(["john.doe@example.com"], "")
+    assert users.iloc[0]["last_name"] == "Doe"
+
+
 def test_extract_emails_from_first_column_ignores_other_columns():
     df = pd.DataFrame({
         0: ["john.doe@example.com", "jane.smith@example.com"],

@@ -29,7 +29,15 @@ def extract_emails_from_first_column(df: pd.DataFrame) -> list[str]:
     return df.iloc[:, 0].dropna().astype(str).tolist()
 
 
-def build_user_table(emails: list[str]) -> pd.DataFrame:
+def build_user_table(emails: list[str], project_name: str = "") -> pd.DataFrame:
+    """`project_name`, when given, is appended to every derived last name as
+    "Lastname(ProjectName)" — the actual last name sent to Adobe — so a batch
+    of users provisioned for a specific project/engagement is identifiable by
+    name alone. It's applied here rather than in `derive_name()` (which only
+    ever parses the email itself) so it stays a per-batch, per-wizard-run
+    concern; the result still lands in the editable `last_name` column, so an
+    admin can hand-fix any row afterward."""
+    project_name = project_name.strip()
     seen: set[str] = set()
     rows: list[dict[str, Any]] = []
     for raw in emails:
@@ -38,11 +46,12 @@ def build_user_table(emails: list[str]) -> pd.DataFrame:
         seen.add(email)
         valid, note = validate_email(email, allowed_domains())
         parsed = derive_name(email)
+        last_name = f"{parsed.last_name}({project_name})" if project_name else parsed.last_name
         rows.append({
             "include": valid and not duplicate,
             "email": email,
             "first_name": parsed.first_name,
-            "last_name": parsed.last_name,
+            "last_name": last_name,
             "validation": "Duplicate" if duplicate else ("Valid" if valid else "Invalid"),
             "notes": "Duplicate input" if duplicate else note or ("Review derived name" if parsed.ambiguous else ""),
         })

@@ -78,6 +78,12 @@ def render() -> None:
 
 def _render_step_users() -> None:
     st.caption("Emails must match the firstname.lastname@domain naming convention (a trailing digit like john2.doe is OK) — anything else is flagged Invalid on the next step.")
+    project_name = st.text_input(
+        "Project name (optional)",
+        key="project_name_input",
+        help='If set, appended to every derived last name as "Lastname(ProjectName)" — the actual '
+        "last name sent to Adobe. Leave blank to use the last name as parsed from the email.",
+    ).strip()
     source = st.radio("Input method", ["Paste emails", "Upload CSV/XLSX"], horizontal=True)
     emails: list[str] = []
     if source == "Paste emails":
@@ -98,7 +104,7 @@ def _render_step_users() -> None:
             if not emails:
                 st.warning("No values were found in the first column of this file.")
     if st.button("Validate and continue", type="primary", disabled=not emails):
-        st.session_state.users = build_user_table(emails)
+        st.session_state.users = build_user_table(emails, project_name)
         st.session_state.validation_checked = False
         st.session_state.provision_step = 2
         st.rerun()
