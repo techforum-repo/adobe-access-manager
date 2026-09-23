@@ -49,7 +49,7 @@ def test_user_search_shows_special_permissions_for_an_admin(temp_db):
     at = AppTest.from_file(APP_PATH)
     at.run(timeout=30)
     _goto(at, "User search")
-    [w for w in at.text_input if w.label == "User email"][0].set_value("admin.user@example.com").run(timeout=30)
+    [w for w in at.text_area if w.label == "User email(s)"][0].set_value("admin.user@example.com").run(timeout=30)
     [b for b in at.button if b.label == "Search Adobe"][0].click().run(timeout=30)
     assert not at.exception
 
@@ -69,7 +69,7 @@ def test_user_search_shows_no_special_permissions_section_for_a_plain_user(temp_
     at = AppTest.from_file(APP_PATH)
     at.run(timeout=30)
     _goto(at, "User search")
-    [w for w in at.text_input if w.label == "User email"][0].set_value("plain.user@example.com").run(timeout=30)
+    [w for w in at.text_area if w.label == "User email(s)"][0].set_value("plain.user@example.com").run(timeout=30)
     [b for b in at.button if b.label == "Search Adobe"][0].click().run(timeout=30)
     assert not at.exception
 
