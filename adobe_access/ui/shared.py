@@ -114,6 +114,7 @@ def reset_provisioning() -> None:
     st.session_state.validation_checked = False
     st.session_state.last_request_id = None
     st.session_state.pop("project_name_input", None)
+    st.session_state.pop("project_name_new", None)
     reset_group_picker("provision")
 
 

@@ -4,7 +4,7 @@ import streamlit as st
 
 from adobe_access import diagnostics, settings_store
 from adobe_access.config import settings
-from adobe_access.database import catalog_status, record
+from adobe_access.database import add_project, catalog_status, delete_project, list_projects, record
 from adobe_access.ui.shared import render_friendly_error
 
 
@@ -85,6 +85,9 @@ def render() -> None:
         st.caption(f"Overridden from .env: {', '.join(sorted(overridden))}")
 
     st.divider()
+    _render_projects()
+
+    st.divider()
     st.markdown("#### Adobe connection")
     a1, a2, a3 = st.columns(3)
     a1.metric("Mode", "Mock" if settings.mock_adobe else ("Live write" if settings.adobe_write_enabled else "Live read/test"))
@@ -121,3 +124,40 @@ def render() -> None:
         "update .env and restart the app to change them. That keeps write mode from being "
         "flipped on by accident from the UI."
     )
+
+
+def _render_projects() -> None:
+    st.markdown("#### Projects")
+    st.caption(
+        'Project names offered in Provision access and User search. A user is tagged with a project '
+        'via their Adobe last name, as "Lastname(ProjectName)". Deleting a project here only removes '
+        "it from the list — users already tagged keep their last name."
+    )
+    projects = list_projects()
+    with st.form("add_project_form", clear_on_submit=True):
+        c1, c2 = st.columns([4, 1])
+        new_name = c1.text_input("New project name", label_visibility="collapsed", placeholder="New project name")
+        added = c2.form_submit_button("Add project")
+    if added:
+        try:
+            created = add_project(new_name, st.session_state.actor)
+        except ValueError as exc:
+            st.error(str(exc))
+        else:
+            if created:
+                record(st.session_state.actor, "project-add", "", [], "Success", new_name.strip())
+                st.toast(f"Project '{new_name.strip()}' added.")
+                st.rerun()
+            else:
+                st.warning(f"Project '{new_name.strip()}' already exists.")
+    if not projects:
+        st.info("No projects saved yet.")
+        return
+    for name in projects:
+        n1, n2 = st.columns([4, 1])
+        n1.write(name)
+        if n2.button("Delete", key=f"delete_project_{name}"):
+            delete_project(name)
+            record(st.session_state.actor, "project-delete", "", [], "Success", name)
+            st.toast(f"Project '{name}' removed.")
+            st.rerun()

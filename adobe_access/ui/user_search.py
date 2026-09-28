@@ -11,12 +11,14 @@ from adobe_access.users import (
     UserLookupError,
     browse_cached_users,
     get_cached_user,
+    known_projects,
     lookup_user,
     membership_table,
     special_permissions,
+    update_user_name,
     user_export_table,
 )
-from adobe_access.utils import safe_csv
+from adobe_access.utils import safe_csv, split_project_suffix, with_project_suffix
 
 
 def render() -> None:
@@ -186,14 +188,21 @@ def _render_paginated_results(results: list[dict]) -> None:
 
 
 def _render_browse_cached() -> None:
-    query = st.text_input(
+    q1, q2 = st.columns([3, 2])
+    query = q1.text_input(
         "Search cached users",
         placeholder="Leave blank to show everyone synced",
         key="user_browse_query",
     )
-    results = browse_cached_users(query)
+    project = q2.selectbox(
+        "Project", ["", *known_projects()],
+        format_func=lambda name: name or "All projects",
+        key="user_browse_project",
+        help='Matches the "(ProjectName)" suffix on the user\'s last name.',
+    )
+    results = browse_cached_users(query, project)
     if results.empty:
-        if query:
+        if query or project:
             st.info("No cached users match that search.")
         else:
             st.info("No users are cached yet. Click \"Sync users from Adobe\" above.")
@@ -201,7 +210,7 @@ def _render_browse_cached() -> None:
 
     st.caption(f"{len(results)} cached user(s).")
     display = results.rename(columns={
-        "email": "Email", "display_name": "Name", "identity_type": "Identity type",
+        "email": "Email", "display_name": "Name", "project": "Project", "identity_type": "Identity type",
         "status": "Status", "custom_group_count": "Custom groups",
     })
     st.dataframe(display, width='stretch', hide_index=True)
@@ -221,6 +230,72 @@ def _render_browse_cached() -> None:
             _render_user_detail(cached_user, key_prefix="browse")
 
 
+def _render_edit_name(user: dict, *, key_prefix: str) -> None:
+    """Edit an existing user's first/last name in Adobe.
+
+    Mutates `user` in place on success rather than re-fetching — for the
+    search-results path `user` is the same dict object stored in
+    `st.session_state.user_search_results`, so this also updates what a
+    later rerun (e.g. paging) shows without an extra Adobe round trip. The
+    Browse tab always rebuilds `user` fresh from the local cache on every
+    rerun, which update_user_name() has already patched by the time the
+    st.rerun() below fires.
+    """
+    email = str(user.get("email") or "")
+    identity_type = str(user.get("identity_type") or "").strip().lower()
+    with st.expander("Edit name"):
+        if identity_type == "adobeid":
+            st.caption("Adobe ID users manage their own profile in Adobe's account system — this app can't rename them.")
+            return
+        base_last, current_project = split_project_suffix(str(user.get("last_name") or ""))
+        projects = known_projects()
+        if current_project and current_project.casefold() not in {p.casefold() for p in projects}:
+            projects.append(current_project)
+        project_options = ["", *projects]
+        project_index = next(
+            (i for i, p in enumerate(project_options) if p.casefold() == current_project.casefold()), 0
+        )
+        c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
+        new_first = c1.text_input("First name", value=user.get("first_name", ""), key=f"{key_prefix}_edit_first")
+        new_base_last = c2.text_input("Last name", value=base_last, key=f"{key_prefix}_edit_last")
+        new_project = c3.selectbox(
+            "Project", project_options, index=project_index,
+            format_func=lambda name: name or "(none)",
+            key=f"{key_prefix}_edit_project",
+            help='Saved to Adobe as "Lastname(ProjectName)". Manage the list in Settings.',
+        )
+        c4.write("")
+        c4.write("")
+        if not c4.button("Save", key=f"{key_prefix}_edit_save"):
+            return
+        if not new_first.strip() or not new_base_last.strip():
+            st.error("First and last name can't be empty.")
+            return
+        new_last = with_project_suffix(new_base_last, new_project)
+        try:
+            with st.spinner("Updating name in Adobe..."):
+                result = update_user_name(email, new_first, new_last)
+        except UserLookupError as exc:
+            record(st.session_state.actor, "user-update-name", email, [], "Failed", str(exc))
+            if render_friendly_error(exc, key=f"{key_prefix}_retry_edit_name", context=f"While updating {email}."):
+                st.rerun()
+            return
+        if result.get("success"):
+            user["first_name"] = new_first.strip()
+            user["last_name"] = new_last.strip()
+            user["display_name"] = f"{new_first.strip()} {new_last.strip()}".strip() or email
+            record(
+                st.session_state.actor, "user-update-name", email, [], "Success",
+                f"first_name={new_first.strip()!r}, last_name={new_last.strip()!r}",
+            )
+            st.success("Name updated.")
+            st.rerun()
+        else:
+            detail = (result.get("raw") or {}).get("message") or "Adobe did not confirm the update."
+            record(st.session_state.actor, "user-update-name", email, [], "Failed", detail)
+            st.error(detail)
+
+
 def _render_user_detail(user: dict, *, key_prefix: str) -> None:
     """Shared detail view for both the exact-search result and a cached-browse
     drill-down — same shape (email/first_name/last_name/identity_type/status/
@@ -228,6 +303,7 @@ def _render_user_detail(user: dict, *, key_prefix: str) -> None:
     name = user.get("display_name") or user.get("email") or "Unknown user"
     st.markdown(f"### {name}")
     st.caption(str(user.get("email") or ""))
+    _render_edit_name(user, key_prefix=key_prefix)
     special = special_permissions(user)
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Identity type", user.get("identity_type") or "Unknown")
