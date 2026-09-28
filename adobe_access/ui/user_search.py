@@ -72,9 +72,12 @@ def _parse_lookup_emails(raw: str) -> list[str]:
 
 def _render_exact_search() -> None:
     with st.form("user_lookup_form", clear_on_submit=False):
+        # Keyed (not value=...) so the widget's identity is stable: an unkeyed
+        # widget whose `value` changes between runs becomes a new widget, and
+        # the next submit silently searched the previous email again.
         lookup_text = st.text_area(
             "User email(s)",
-            value=st.session_state.user_search_email_value,
+            key="user_search_email_value",
             placeholder="firstname.lastname@example.com\nOne per line, or separated by comma/semicolon, to search several at once.",
             height=100,
         )
@@ -82,7 +85,6 @@ def _render_exact_search() -> None:
     search_submitted = search_submitted or st.session_state.pop("_retry_user_search", False)
 
     if search_submitted:
-        st.session_state.user_search_email_value = lookup_text
         emails = _parse_lookup_emails(lookup_text)
         results: list[dict] = []
         with st.spinner(f"Looking up {len(emails)} user(s) in Adobe..." if len(emails) > 1 else "Looking up the user in Adobe..."):
@@ -237,6 +239,10 @@ def _render_browse_cached() -> None:
             _render_user_detail(cached_user, key_prefix="browse")
 
 
+def _widget_key(key_prefix: str, email: str, *stored_values: object) -> str:
+    return "_".join([key_prefix, email.strip().lower(), *(str(v) for v in stored_values)])
+
+
 def _render_edit_name(user: dict, *, key_prefix: str) -> None:
     """Edit an existing user's first/last name in Adobe.
 
@@ -254,9 +260,13 @@ def _render_edit_name(user: dict, *, key_prefix: str) -> None:
         if identity_type == "adobeid":
             st.caption("Adobe ID users manage their own profile in Adobe's account system — this app can't rename them.")
             return
+        # Keyed by the user and their stored name: Streamlit keeps a keyed
+        # widget's value across reruns, so a fixed key would carry the previous
+        # user's typed name into the next search (and Save would apply it).
+        widget_key = _widget_key(key_prefix, email, user.get("first_name", ""), user.get("last_name", ""))
         c1, c2, c3 = st.columns([2, 2, 1])
-        new_first = c1.text_input("First name", value=user.get("first_name", ""), key=f"{key_prefix}_edit_first")
-        new_last = c2.text_input("Last name", value=user.get("last_name", ""), key=f"{key_prefix}_edit_last")
+        new_first = c1.text_input("First name", value=user.get("first_name", ""), key=f"{widget_key}_edit_first")
+        new_last = c2.text_input("Last name", value=user.get("last_name", ""), key=f"{widget_key}_edit_last")
         c3.write("")
         c3.write("")
         if not c3.button("Save", key=f"{key_prefix}_edit_save"):
@@ -312,7 +322,9 @@ def _render_project_assignment(user: dict, *, key_prefix: str) -> None:
     choice = c1.selectbox(
         "Project", options, index=index,
         format_func=lambda name: name or "(none)",
-        key=f"{key_prefix}_project",
+        # Same reasoning as _render_edit_name(): keyed by user + stored project
+        # so the dropdown re-initializes for each user and after each save.
+        key=f"{_widget_key(key_prefix, email, current)}_project",
         help="Stored in this app's local database only — Adobe isn't changed. Manage the list in Settings.",
         disabled=not projects,
     )
