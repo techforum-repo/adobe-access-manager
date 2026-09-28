@@ -291,7 +291,12 @@ def _render_edit_name(user: dict, *, key_prefix: str) -> None:
             st.success("Name updated.")
             st.rerun()
         else:
-            detail = (result.get("raw") or {}).get("message") or "Adobe did not confirm the update."
+            raw = result.get("raw") or {}
+            detail = (
+                result.get("error")
+                or (raw.get("message") if isinstance(raw, dict) else "")
+                or f"Adobe did not confirm the update. Response: {str(raw)[:500]}"
+            )
             record(st.session_state.actor, "user-update-name", email, [], "Failed", detail)
             st.error(detail)
 

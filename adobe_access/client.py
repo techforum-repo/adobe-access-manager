@@ -84,6 +84,22 @@ class _RequestPacer:
 _pacer = _RequestPacer()
 
 
+def umapi_error_detail(errors: Any) -> str:
+    """Flatten a UMAPI action response's `errors` list — each entry carries
+    `message` and `errorCode` — into one readable line for the UI/audit log."""
+    if not isinstance(errors, list):
+        return ""
+    parts: list[str] = []
+    for item in errors:
+        if not isinstance(item, dict):
+            parts.append(str(item))
+            continue
+        message = str(item.get("message") or "Unknown error").strip()
+        code = str(item.get("errorCode") or "").strip()
+        parts.append(f"{message} ({code})" if code else message)
+    return "; ".join(parts)
+
+
 def _first_value(mapping: dict[str, Any], *keys: str) -> Any:
     for key in keys:
         value = mapping.get(key)
@@ -413,7 +429,7 @@ class AdobeUMAPIClient:
         async with self._new_http_client() as http:
             raw = await self._request(http, "POST", url, json=command)
         errors = raw.get("errors", []) if isinstance(raw, dict) else []
-        return {"success": not bool(errors), "raw": raw}
+        return {"success": not bool(errors), "error": umapi_error_detail(errors), "raw": raw}
 
 
 client = MockAdobeClient() if settings.mock_adobe else AdobeUMAPIClient()

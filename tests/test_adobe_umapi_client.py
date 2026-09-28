@@ -81,6 +81,24 @@ def test_list_groups_paginates_and_reuses_one_http_client(configured, monkeypatc
     assert calls["clients_constructed"] == 1
 
 
+def test_update_profile_surfaces_umapi_error_message(configured, monkeypatch):
+    """UMAPI reports action failures as HTTP 200 with an `errors` list — the
+    message/errorCode must reach the caller rather than a generic fallback."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/token":
+            return _token_response()
+        return httpx.Response(200, json={
+            "completed": 0, "notCompleted": 1, "completedInTestMode": 0, "result": "error",
+            "errors": [{"index": 0, "step": 0, "message": "User does not exist", "errorCode": "error.user.nonexistent"}],
+        })
+
+    _install_transport(monkeypatch, handler)
+    result = run(AdobeUMAPIClient().update_profile("jane.doe@example.com", "Jane", "Doe"))
+
+    assert result["success"] is False
+    assert result["error"] == "User does not exist (error.user.nonexistent)"
+
+
 def test_list_groups_filters_non_user_groups(configured, monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/token":
