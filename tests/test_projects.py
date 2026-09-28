@@ -259,3 +259,30 @@ def test_browse_detail_project_resets_when_picking_another_user(temp_db):
     [w for w in at.selectbox if w.label == "Pick a cached user"][0].set_value("bob.kay@example.com").run(timeout=30)
     assert not at.exception
     assert _detail_project(at).value == ""
+
+
+def test_browse_cached_users_accepts_multiple_terms(temp_db):
+    _cache_users()
+    result = browse_cached_users("jane.doe@example.com\nann; BOB.KAY@example.com, nobody@example.com")
+    assert sorted(result["email"]) == ["ann.lee@example.com", "bob.kay@example.com", "jane.doe@example.com"]
+
+
+def test_browse_search_terms_are_literal_not_regex(temp_db):
+    _cache_users()
+    assert browse_cached_users("[").empty  # previously a regex error
+    assert len(browse_cached_users("(")) == 3  # literal match on "Lastname(Project)" names
+    assert browse_cached_users("jane.doe")["email"].tolist() == ["jane.doe@example.com"]
+
+
+def test_browse_tab_multi_search_lists_unmatched_terms(temp_db):
+    _cache_users()
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=30)
+    _goto(at, "User search")
+    at.text_area(key="user_browse_query").set_value("jane.doe@example.com\nnobody@example.com").run(timeout=30)
+    assert not at.exception
+    assert any("1 cached user(s)" in c.value for c in at.caption)
+    assert any("nobody@example.com" in w.value for w in at.warning)
+    assert [w for w in at.selectbox if w.label == "Pick a cached user"][0].options == [
+        "Jane Doe(Apollo) · jane.doe@example.com",
+    ]

@@ -22,6 +22,8 @@ from adobe_access.users import (
     lookup_user,
     membership_table,
     special_permissions,
+    split_search_terms,
+    unmatched_search_terms,
     update_user_name,
     user_export_table,
 )
@@ -198,18 +200,26 @@ def _render_paginated_results(results: list[dict]) -> None:
 
 def _render_browse_cached() -> None:
     q1, q2 = st.columns([3, 2])
-    query = q1.text_input(
+    query = q1.text_area(
         "Search cached users",
-        placeholder="Leave blank to show everyone synced",
+        placeholder="Leave blank to show everyone synced.\nSearch several at once: one email or name per line, or separated by comma/semicolon.",
         key="user_browse_query",
+        height=100,
+        help="Each term matches part of an email or name; users matching any term are shown. "
+        "Press Ctrl+Enter (or click away) to apply.",
     )
     project = q2.selectbox(
         "Project", ["", *list_projects()],
         format_func=lambda name: name or "All projects",
         key="user_browse_project",
-        help='Projects saved in Settings. Matches the "(ProjectName)" suffix on the user\'s last name.',
+        help="Projects saved in Settings. Matches the user's local project link, or a "
+        '"(ProjectName)" last-name suffix when they have none.',
     )
     results = browse_cached_users(query, project)
+    unmatched = unmatched_search_terms(results, query)
+    if unmatched and len(split_search_terms(query)) > 1:
+        scope = f" in project {project}" if project else ""
+        st.warning(f"No cached user matched{scope}: {', '.join(unmatched)}")
     if results.empty:
         if query or project:
             st.info("No cached users match that search.")

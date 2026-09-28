@@ -75,14 +75,34 @@ def effective_project(email: str, last_name: str, assignments: dict[str, str], s
     return saved.get(suffix.casefold(), "") if suffix else ""
 
 
+def split_search_terms(query: str) -> list[str]:
+    """Split a cached-user search into terms — one per line, or separated by
+    comma/semicolon — casefolded and de-duplicated in order."""
+    items = [item.strip().casefold() for item in query.replace(",", "\n").replace(";", "\n").splitlines()]
+    return list(dict.fromkeys(item for item in items if item))
+
+
+def _term_mask(result: pd.DataFrame, term: str) -> pd.Series:
+    return (
+        result["email"].str.casefold().str.contains(term, regex=False, na=False)
+        | result["display_name"].str.casefold().str.contains(term, regex=False, na=False)
+    )
+
+
+def unmatched_search_terms(result: pd.DataFrame, query: str) -> list[str]:
+    """Terms from `query` that matched none of the rows in `result`."""
+    return [term for term in split_search_terms(query) if result.empty or not _term_mask(result, term).any()]
+
+
 def browse_cached_users(query: str = "", project: str = "") -> pd.DataFrame:
     """Browse the local user directory cache (populated by "Sync users" on the
     User search page) — no Adobe call. Each row's custom-group count is computed
     against the *current* group cache rather than stored at sync time, so it
     stays accurate even if groups are re-synced without re-syncing users.
 
-    `project`, when given, keeps only users whose effective_project() matches
-    it (case-insensitive).
+    `query` may hold several terms (see split_search_terms()); a user matches
+    if any term is a substring of their email or name. `project`, when given,
+    keeps only users whose effective_project() matches it (case-insensitive).
     """
     users = read_managed_users()
     columns = ["email", "display_name", "project", "identity_type", "status", "custom_group_count"]
@@ -114,12 +134,11 @@ def browse_cached_users(query: str = "", project: str = "") -> pd.DataFrame:
         })
     result = pd.DataFrame(rows, columns=columns)
 
-    clean_query = query.strip().casefold()
-    if clean_query:
-        mask = (
-            result["email"].str.casefold().str.contains(clean_query, na=False)
-            | result["display_name"].str.casefold().str.contains(clean_query, na=False)
-        )
+    terms = split_search_terms(query)
+    if terms:
+        mask = pd.Series(False, index=result.index)
+        for term in terms:
+            mask |= _term_mask(result, term)
         result = result[mask]
 
     clean_project = project.strip().casefold()

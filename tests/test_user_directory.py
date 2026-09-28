@@ -129,7 +129,7 @@ def test_sync_and_browse_flow_through_the_app(temp_db):
     # actual cached-count metric instead of the ephemeral message.
     assert any(m.label == "Cached users" and m.value != "0" for m in at.metric)
 
-    tabs_query = [w for w in at.text_input if w.label == "Search cached users"]
+    tabs_query = [w for w in at.text_area if w.label == "Search cached users"]
     assert tabs_query, "browse tab's search field should be present after sync"
     tabs_query[0].set_value("").run(timeout=30)
     assert not at.exception
