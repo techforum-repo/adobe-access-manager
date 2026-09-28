@@ -6,7 +6,7 @@ from typing import Any
 import pandas as pd
 
 from .client import client
-from .database import list_projects, read_managed_groups, read_managed_users, update_managed_user_name
+from .database import list_projects, read_managed_groups, read_managed_users, update_managed_user_name, user_project_map
 from .provisioning import run
 from .utils import classify_special_permission, is_special_permission, normalize_group_match_key, split_project_suffix
 
@@ -64,17 +64,15 @@ def update_user_name(email: str, first_name: str, last_name: str) -> dict[str, A
     return result
 
 
-def known_projects() -> list[str]:
-    """Saved project names plus any project suffix found on a cached user's last
-    name (e.g. users tagged before the project list existed), de-duplicated
-    case-insensitively with the saved spelling winning."""
-    names: dict[str, str] = {name.casefold(): name for name in list_projects()}
-    users = read_managed_users()
-    for last_name in users.get("last_name", pd.Series(dtype=str)):
-        _, project = split_project_suffix(str(last_name))
-        if project:
-            names.setdefault(project.casefold(), project)
-    return sorted(names.values(), key=str.casefold)
+def effective_project(email: str, last_name: str, assignments: dict[str, str], saved: dict[str, str]) -> str:
+    """A user's project: the local association (user_projects) wins; otherwise a
+    "(ProjectName)" last-name suffix, but only when it names a project saved in
+    Settings (returned in its saved spelling). Anything else is no project."""
+    assigned = assignments.get(email.strip().lower(), "")
+    if assigned:
+        return saved.get(assigned.casefold(), assigned)
+    _, suffix = split_project_suffix(last_name)
+    return saved.get(suffix.casefold(), "") if suffix else ""
 
 
 def browse_cached_users(query: str = "", project: str = "") -> pd.DataFrame:
@@ -83,8 +81,8 @@ def browse_cached_users(query: str = "", project: str = "") -> pd.DataFrame:
     against the *current* group cache rather than stored at sync time, so it
     stays accurate even if groups are re-synced without re-syncing users.
 
-    `project`, when given, keeps only users whose last name carries that
-    "(ProjectName)" suffix (case-insensitive exact match).
+    `project`, when given, keeps only users whose effective_project() matches
+    it (case-insensitive).
     """
     users = read_managed_users()
     columns = ["email", "display_name", "project", "identity_type", "status", "custom_group_count"]
@@ -98,6 +96,8 @@ def browse_cached_users(query: str = "", project: str = "") -> pd.DataFrame:
         if str(name).strip()
     }
 
+    assignments = user_project_map()
+    saved = {name.casefold(): name for name in list_projects()}
     rows: list[dict[str, Any]] = []
     for _, user in users.iterrows():
         display_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or user["email"]
@@ -107,7 +107,7 @@ def browse_cached_users(query: str = "", project: str = "") -> pd.DataFrame:
         rows.append({
             "email": user["email"],
             "display_name": display_name,
-            "project": split_project_suffix(str(user.get("last_name") or ""))[1],
+            "project": effective_project(str(user["email"]), str(user.get("last_name") or ""), assignments, saved),
             "identity_type": user.get("identity_type") or "",
             "status": user.get("status") or "",
             "custom_group_count": custom_group_count,

@@ -4,7 +4,14 @@ import streamlit as st
 
 from adobe_access import diagnostics, settings_store
 from adobe_access.config import settings
-from adobe_access.database import add_project, catalog_status, delete_project, list_projects, record
+from adobe_access.database import (
+    add_project,
+    catalog_status,
+    delete_project,
+    list_projects,
+    project_user_counts,
+    record,
+)
 from adobe_access.ui.shared import render_friendly_error
 
 
@@ -129,11 +136,13 @@ def render() -> None:
 def _render_projects() -> None:
     st.markdown("#### Projects")
     st.caption(
-        'Project names offered in Provision access and User search. A user is tagged with a project '
-        'via their Adobe last name, as "Lastname(ProjectName)". Deleting a project here only removes '
-        "it from the list — users already tagged keep their last name."
+        "Project names offered in Provision access and User search. New users get the project in "
+        'their Adobe last name as "Lastname(ProjectName)"; existing users are linked to a project '
+        "in this app's local database. Deleting a project removes it and its local user links — "
+        "Adobe last names are not changed."
     )
     projects = list_projects()
+    counts = project_user_counts()
     with st.form("add_project_form", clear_on_submit=True):
         c1, c2 = st.columns([4, 1])
         new_name = c1.text_input("New project name", label_visibility="collapsed", placeholder="New project name")
@@ -155,7 +164,7 @@ def _render_projects() -> None:
         return
     for name in projects:
         n1, n2 = st.columns([4, 1])
-        n1.write(name)
+        n1.write(f"{name} · {counts.get(name.casefold(), 0)} linked user(s)")
         if n2.button("Delete", key=f"delete_project_{name}"):
             delete_project(name)
             record(st.session_state.actor, "project-delete", "", [], "Success", name)

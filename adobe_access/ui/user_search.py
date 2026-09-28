@@ -4,21 +4,28 @@ import pandas as pd
 import streamlit as st
 
 from adobe_access.client import client
-from adobe_access.database import record, replace_managed_users, user_catalog_status
+from adobe_access.database import (
+    get_user_project,
+    list_projects,
+    record,
+    replace_managed_users,
+    set_user_project,
+    user_catalog_status,
+)
 from adobe_access.provisioning import build_user_table, run
 from adobe_access.ui.shared import render_friendly_error, render_special_permissions
 from adobe_access.users import (
     UserLookupError,
     browse_cached_users,
+    effective_project,
     get_cached_user,
-    known_projects,
     lookup_user,
     membership_table,
     special_permissions,
     update_user_name,
     user_export_table,
 )
-from adobe_access.utils import safe_csv, split_project_suffix, with_project_suffix
+from adobe_access.utils import safe_csv
 
 
 def render() -> None:
@@ -195,10 +202,10 @@ def _render_browse_cached() -> None:
         key="user_browse_query",
     )
     project = q2.selectbox(
-        "Project", ["", *known_projects()],
+        "Project", ["", *list_projects()],
         format_func=lambda name: name or "All projects",
         key="user_browse_project",
-        help='Matches the "(ProjectName)" suffix on the user\'s last name.',
+        help='Projects saved in Settings. Matches the "(ProjectName)" suffix on the user\'s last name.',
     )
     results = browse_cached_users(query, project)
     if results.empty:
@@ -247,31 +254,16 @@ def _render_edit_name(user: dict, *, key_prefix: str) -> None:
         if identity_type == "adobeid":
             st.caption("Adobe ID users manage their own profile in Adobe's account system — this app can't rename them.")
             return
-        base_last, current_project = split_project_suffix(str(user.get("last_name") or ""))
-        projects = known_projects()
-        if current_project and current_project.casefold() not in {p.casefold() for p in projects}:
-            projects.append(current_project)
-        project_options = ["", *projects]
-        project_index = next(
-            (i for i, p in enumerate(project_options) if p.casefold() == current_project.casefold()), 0
-        )
-        c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
+        c1, c2, c3 = st.columns([2, 2, 1])
         new_first = c1.text_input("First name", value=user.get("first_name", ""), key=f"{key_prefix}_edit_first")
-        new_base_last = c2.text_input("Last name", value=base_last, key=f"{key_prefix}_edit_last")
-        new_project = c3.selectbox(
-            "Project", project_options, index=project_index,
-            format_func=lambda name: name or "(none)",
-            key=f"{key_prefix}_edit_project",
-            help='Saved to Adobe as "Lastname(ProjectName)". Manage the list in Settings.',
-        )
-        c4.write("")
-        c4.write("")
-        if not c4.button("Save", key=f"{key_prefix}_edit_save"):
+        new_last = c2.text_input("Last name", value=user.get("last_name", ""), key=f"{key_prefix}_edit_last")
+        c3.write("")
+        c3.write("")
+        if not c3.button("Save", key=f"{key_prefix}_edit_save"):
             return
-        if not new_first.strip() or not new_base_last.strip():
+        if not new_first.strip() or not new_last.strip():
             st.error("First and last name can't be empty.")
             return
-        new_last = with_project_suffix(new_base_last, new_project)
         try:
             with st.spinner("Updating name in Adobe..."):
                 result = update_user_name(email, new_first, new_last)
@@ -299,6 +291,41 @@ def _render_edit_name(user: dict, *, key_prefix: str) -> None:
             )
             record(st.session_state.actor, "user-update-name", email, [], "Failed", detail)
             st.error(detail)
+            if "trusted domain" in detail.casefold():
+                st.info(
+                    "This user belongs to a domain owned by another Adobe org, so only that org's "
+                    "admin can rename them. To tag them with a project, use Project below — "
+                    "it's stored locally and doesn't need Adobe."
+                )
+
+
+def _render_project_assignment(user: dict, *, key_prefix: str) -> None:
+    """Associate the user with a saved project in the local DB only — works for
+    any user, including trusted-domain users whose Adobe name can't be changed."""
+    email = str(user.get("email") or "")
+    projects = list_projects()
+    saved = {name.casefold(): name for name in projects}
+    current = effective_project(email, str(user.get("last_name") or ""), {email.lower(): get_user_project(email)}, saved)
+    options = ["", *projects]
+    index = next((i for i, name in enumerate(options) if name.casefold() == current.casefold()), 0)
+    c1, c2 = st.columns([3, 1])
+    choice = c1.selectbox(
+        "Project", options, index=index,
+        format_func=lambda name: name or "(none)",
+        key=f"{key_prefix}_project",
+        help="Stored in this app's local database only — Adobe isn't changed. Manage the list in Settings.",
+        disabled=not projects,
+    )
+    if not projects:
+        c1.caption("No projects saved yet — add them in Settings.")
+        return
+    c2.write("")
+    c2.write("")
+    if c2.button("Save project", key=f"{key_prefix}_project_save", disabled=choice == current):
+        set_user_project(email, choice, st.session_state.actor)
+        record(st.session_state.actor, "user-set-project", email, [], "Success", f"project={choice or '(none)'}")
+        st.toast(f"Project set to {choice}." if choice else "Project removed.")
+        st.rerun()
 
 
 def _render_user_detail(user: dict, *, key_prefix: str) -> None:
@@ -308,6 +335,7 @@ def _render_user_detail(user: dict, *, key_prefix: str) -> None:
     name = user.get("display_name") or user.get("email") or "Unknown user"
     st.markdown(f"### {name}")
     st.caption(str(user.get("email") or ""))
+    _render_project_assignment(user, key_prefix=key_prefix)
     _render_edit_name(user, key_prefix=key_prefix)
     special = special_permissions(user)
     c1, c2, c3, c4 = st.columns(4)
