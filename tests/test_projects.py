@@ -208,3 +208,54 @@ def test_execute_links_new_and_existing_users_to_the_batch_project(temp_db, monk
     assert database.get_user_project("new.person@example.com") == "Gemini"  # new user
     assert client.users["new.person@example.com"]["last_name"] == "Person(Gemini)"
     assert client.users["jane.doe@example.com"]["last_name"] == "Doe(Apollo)"  # existing name untouched
+
+
+def _detail_project(at: AppTest):
+    """The per-user Project dropdown — not the Browse tab's "Project" filter,
+    which shares the label (AppTest renders every tab)."""
+    return [w for w in at.selectbox if w.label == "Project" and w.key != "user_browse_project"][0]
+
+
+def _search(at: AppTest, email: str) -> None:
+    [w for w in at.text_area if w.label == "User email(s)"][0].set_value(email).run(timeout=30)
+    [b for b in at.button if b.label == "Search Adobe"][0].click().run(timeout=30)
+    assert not at.exception
+
+
+def test_search_detail_project_and_name_reset_for_the_next_user(temp_db):
+    """Reported bug: after one search showed a project, the next search kept
+    showing it (fixed widget keys kept the previous user's value)."""
+    database.add_project("Gemini", "a@example.com")
+    provisioning.client.users["bob.kay@example.com"] = {
+        "email": "bob.kay@example.com", "first_name": "Bob", "last_name": "Kay",
+        "identity_type": "federatedID", "status": "active", "groups": set(),
+    }
+    database.set_user_project("jane.doe@example.com", "Gemini", "a@example.com")
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=30)
+    _goto(at, "User search")
+
+    _search(at, "jane.doe@example.com")
+    assert _detail_project(at).value == "Gemini"
+    [w for w in at.text_input if w.label == "First name"][0].set_value("Typed")
+
+    _search(at, "bob.kay@example.com")
+    assert _detail_project(at).value == ""
+    assert [w for w in at.text_input if w.label == "First name"][0].value == "Bob"
+    assert [w for w in at.text_input if w.label == "Last name"][0].value == "Kay"
+
+
+def test_browse_detail_project_resets_when_picking_another_user(temp_db):
+    database.add_project("Gemini", "a@example.com")
+    _cache_users()
+    database.set_user_project("ann.lee@example.com", "Gemini", "a@example.com")
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=30)
+    _goto(at, "User search")
+
+    picker = [w for w in at.selectbox if w.label == "Pick a cached user"][0]
+    picker.set_value("ann.lee@example.com").run(timeout=30)
+    assert _detail_project(at).value == "Gemini"
+    [w for w in at.selectbox if w.label == "Pick a cached user"][0].set_value("bob.kay@example.com").run(timeout=30)
+    assert not at.exception
+    assert _detail_project(at).value == ""
