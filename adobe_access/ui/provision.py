@@ -17,6 +17,7 @@ from adobe_access.database import (
     record,
     save_execution,
     save_recent_request,
+    set_user_project,
     update_request_status,
 )
 from adobe_access.provisioning import (
@@ -89,8 +90,8 @@ def _render_step_users() -> None:
         ["", *list_projects(), _NEW_PROJECT],
         format_func=lambda name: name or "(none)",
         key="project_name_input",
-        help='If set, appended to every derived last name as "Lastname(ProjectName)" — the actual '
-        "last name sent to Adobe. Leave as (none) to use the last name as parsed from the email.",
+        help='New users get it in their Adobe last name as "Lastname(ProjectName)". Every user in the '
+        "batch (new or existing) is also linked to it in the local database after a successful Execute.",
     )
     project_name = project_choice
     if project_choice == _NEW_PROJECT:
@@ -124,6 +125,9 @@ def _render_step_users() -> None:
             except ValueError as exc:
                 st.error(str(exc))
                 return
+        # Held outside the widget keys: Streamlit drops a widget's state once
+        # it stops rendering, and step 1's widgets aren't rendered at Execute.
+        st.session_state.provision_project = project_name
         st.session_state.users = build_user_table(emails, project_name)
         st.session_state.validation_checked = False
         st.session_state.provision_step = 2
@@ -618,6 +622,13 @@ def _render_step_review() -> None:
                     st.session_state.actor, "provision-execute", str(row["email"]),
                     st.session_state.selected_groups, "Success" if row["success"] else "Failed", detail,
                 )
+            project = st.session_state.get("provision_project", "")
+            if project:
+                # New users also get "(Project)" in their Adobe last name via
+                # build_user_table(); existing users (e.g. trusted-domain users
+                # whose name only the owning org can change) rely on this.
+                for email in results.loc[results["success"] == True, "email"]:  # noqa: E712
+                    set_user_project(str(email), project, st.session_state.actor)
             st.success(f"Execution #{execution_id} complete.")
             e1, e2, e3, e4, e5, e6, e7 = st.columns(7)
             e1.metric("Created", exec_summary["created"])

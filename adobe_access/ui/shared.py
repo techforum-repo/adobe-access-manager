@@ -115,6 +115,7 @@ def reset_provisioning() -> None:
     st.session_state.last_request_id = None
     st.session_state.pop("project_name_input", None)
     st.session_state.pop("project_name_new", None)
+    st.session_state.pop("provision_project", None)
     reset_group_picker("provision")
 
 

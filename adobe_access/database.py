@@ -100,6 +100,17 @@ def initialize() -> None:
           created_by TEXT NOT NULL DEFAULT '',
           created_at TEXT NOT NULL
         )""")
+        # Local-only project association. Adobe names of users in a trusted
+        # domain can only be changed by the owning org, so the
+        # "Lastname(ProjectName)" convention can't tag existing users — this
+        # table is the source of truth for which project a user belongs to.
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS user_projects (
+          email TEXT PRIMARY KEY,
+          project TEXT NOT NULL COLLATE NOCASE,
+          updated_by TEXT NOT NULL DEFAULT '',
+          updated_at TEXT NOT NULL
+        )""")
         conn.execute("""
         CREATE TABLE IF NOT EXISTS app_settings (
           key TEXT PRIMARY KEY,
@@ -347,11 +358,49 @@ def add_project(name: str, actor: str) -> bool:
 
 
 def delete_project(name: str) -> None:
-    """Remove a saved project name. Adobe users already tagged with it keep
-    their "Lastname(ProjectName)" last name — this only drops it from the list."""
+    """Remove a saved project name and every local user association with it.
+    Adobe users whose last name carries "(ProjectName)" keep it — Adobe isn't
+    touched."""
     with _connect() as conn:
         conn.execute("DELETE FROM projects WHERE name=?", (name.strip(),))
+        conn.execute("DELETE FROM user_projects WHERE project=?", (name.strip(),))
         conn.commit()
+
+
+def set_user_project(email: str, project: str, actor: str) -> None:
+    """Associate a user with a project locally; an empty `project` removes the association."""
+    email = email.strip().lower()
+    project = project.strip()
+    with _connect() as conn:
+        if project:
+            conn.execute(
+                """INSERT INTO user_projects(email,project,updated_by,updated_at) VALUES(?,?,?,?)
+                   ON CONFLICT(email) DO UPDATE SET project=excluded.project,
+                     updated_by=excluded.updated_by, updated_at=excluded.updated_at""",
+                (email, project, actor, datetime.now(timezone.utc).isoformat()),
+            )
+        else:
+            conn.execute("DELETE FROM user_projects WHERE email=?", (email,))
+        conn.commit()
+
+
+def get_user_project(email: str) -> str:
+    with _connect() as conn:
+        row = conn.execute("SELECT project FROM user_projects WHERE email=?", (email.strip().lower(),)).fetchone()
+    return str(row[0]) if row else ""
+
+
+def user_project_map() -> dict[str, str]:
+    with _connect() as conn:
+        rows = conn.execute("SELECT email, project FROM user_projects").fetchall()
+    return {str(row[0]): str(row[1]) for row in rows}
+
+
+def project_user_counts() -> dict[str, int]:
+    """Locally associated user count per project, keyed case-insensitively."""
+    with _connect() as conn:
+        rows = conn.execute("SELECT project, COUNT(*) FROM user_projects GROUP BY project").fetchall()
+    return {str(row[0]).casefold(): int(row[1]) for row in rows}
 
 
 def user_catalog_status() -> dict[str, Any]:
