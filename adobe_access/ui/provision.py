@@ -11,7 +11,9 @@ from adobe_access import settings_store
 from adobe_access.client import client
 from adobe_access.config import settings
 from adobe_access.database import (
+    add_project,
     list_favorite_groups,
+    list_projects,
     record,
     save_execution,
     save_recent_request,
@@ -76,14 +78,26 @@ def render() -> None:
         _render_step_review()
 
 
+_NEW_PROJECT = "+ New project…"
+
+
 def _render_step_users() -> None:
     st.caption("Emails must match the firstname.lastname@domain naming convention (a trailing digit like john2.doe is OK) — anything else is flagged Invalid on the next step.")
-    project_name = st.text_input(
-        "Project name (optional)",
+    p1, p2 = st.columns(2)
+    project_choice = p1.selectbox(
+        "Project (optional)",
+        ["", *list_projects(), _NEW_PROJECT],
+        format_func=lambda name: name or "(none)",
         key="project_name_input",
         help='If set, appended to every derived last name as "Lastname(ProjectName)" — the actual '
-        "last name sent to Adobe. Leave blank to use the last name as parsed from the email.",
-    ).strip()
+        "last name sent to Adobe. Leave as (none) to use the last name as parsed from the email.",
+    )
+    project_name = project_choice
+    if project_choice == _NEW_PROJECT:
+        project_name = p2.text_input(
+            "New project name", key="project_name_new",
+            help="Saved to the project list (also manageable in Settings) when you continue.",
+        ).strip()
     source = st.radio("Input method", ["Paste emails", "Upload CSV/XLSX"], horizontal=True)
     emails: list[str] = []
     if source == "Paste emails":
@@ -104,6 +118,12 @@ def _render_step_users() -> None:
             if not emails:
                 st.warning("No values were found in the first column of this file.")
     if st.button("Validate and continue", type="primary", disabled=not emails):
+        if project_choice == _NEW_PROJECT:
+            try:
+                add_project(project_name, st.session_state.actor)
+            except ValueError as exc:
+                st.error(str(exc))
+                return
         st.session_state.users = build_user_table(emails, project_name)
         st.session_state.validation_checked = False
         st.session_state.provision_step = 2

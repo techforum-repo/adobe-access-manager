@@ -8,7 +8,7 @@ import pandas as pd
 from .client import client
 from .retry import call_with_retry
 from .settings_store import allowed_domains
-from .utils import derive_name, normalize_email, validate_email
+from .utils import derive_name, normalize_email, validate_email, with_project_suffix
 
 
 def run(coro):
@@ -46,7 +46,7 @@ def build_user_table(emails: list[str], project_name: str = "") -> pd.DataFrame:
         seen.add(email)
         valid, note = validate_email(email, allowed_domains())
         parsed = derive_name(email)
-        last_name = f"{parsed.last_name}({project_name})" if project_name else parsed.last_name
+        last_name = with_project_suffix(parsed.last_name, project_name)
         rows.append({
             "include": valid and not duplicate,
             "email": email,

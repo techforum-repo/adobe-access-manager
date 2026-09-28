@@ -57,6 +57,26 @@ def derive_name(email: str) -> ParsedName:
     return ParsedName(first, last, ambiguous)
 
 
+_PROJECT_SUFFIX = re.compile(r"^(.*?)\s*\(([^()]+)\)\s*$")
+
+
+def split_project_suffix(last_name: str) -> tuple[str, str]:
+    """Split a "Lastname(ProjectName)" last name — the convention the Provision
+    wizard uses to tag a user with a project — into ("Lastname", "ProjectName").
+    A last name without a trailing parenthesised suffix returns (last_name, "")."""
+    value = str(last_name or "").strip()
+    match = _PROJECT_SUFFIX.match(value)
+    if not match:
+        return value, ""
+    return match.group(1).strip(), match.group(2).strip()
+
+
+def with_project_suffix(last_name: str, project_name: str) -> str:
+    last_name = str(last_name or "").strip()
+    project_name = str(project_name or "").strip()
+    return f"{last_name}({project_name})" if project_name else last_name
+
+
 def validate_email(email: str, allowed_domains: set[str]) -> tuple[bool, str]:
     email = normalize_email(email)
     if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):

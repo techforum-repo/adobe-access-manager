@@ -94,6 +94,13 @@ def initialize() -> None:
           FOREIGN KEY(template_id) REFERENCES templates(id) ON DELETE CASCADE
         )""")
         conn.execute("""
+        CREATE TABLE IF NOT EXISTS projects (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+          created_by TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL
+        )""")
+        conn.execute("""
         CREATE TABLE IF NOT EXISTS app_settings (
           key TEXT PRIMARY KEY,
           value TEXT NOT NULL,
@@ -299,6 +306,52 @@ def read_managed_users() -> pd.DataFrame:
         df["groups"] = df["groups_json"].apply(lambda value: set(json.loads(value or "[]")))
         df = df.drop(columns=["groups_json"])
     return df
+
+
+def update_managed_user_name(email: str, first_name: str, last_name: str) -> bool:
+    """Patch first/last name for one row in the local user-directory cache, if
+    it's present — keeps Browse synced users showing the current name right
+    after an edit, without requiring a full re-sync. Returns False (a no-op)
+    when the user isn't cached, e.g. one only ever seen via exact Adobe search."""
+    with _connect() as conn:
+        cursor = conn.execute(
+            "UPDATE managed_users SET first_name=?, last_name=? WHERE email=?",
+            (first_name, last_name, email.strip().lower()),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def list_projects() -> list[str]:
+    with _connect() as conn:
+        rows = conn.execute("SELECT name FROM projects ORDER BY name COLLATE NOCASE").fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def add_project(name: str, actor: str) -> bool:
+    """Save a project name for reuse in the Provision wizard and user search.
+    Parentheses are rejected since the name is embedded in the Adobe last name
+    as "Lastname(ProjectName)". Returns False if it already exists (case-insensitive)."""
+    clean = name.strip()
+    if not clean:
+        raise ValueError("Project name can't be empty.")
+    if "(" in clean or ")" in clean:
+        raise ValueError("Project name can't contain parentheses.")
+    with _connect() as conn:
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO projects(name,created_by,created_at) VALUES(?,?,?)",
+            (clean, actor, datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def delete_project(name: str) -> None:
+    """Remove a saved project name. Adobe users already tagged with it keep
+    their "Lastname(ProjectName)" last name — this only drops it from the list."""
+    with _connect() as conn:
+        conn.execute("DELETE FROM projects WHERE name=?", (name.strip(),))
+        conn.commit()
 
 
 def user_catalog_status() -> dict[str, Any]:

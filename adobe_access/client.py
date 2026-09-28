@@ -236,6 +236,14 @@ class MockAdobeClient:
         existing["groups"].difference_update(present_to_remove)
         return {"success": True, "test_only": False, "created": will_create, "groups_added": missing, "groups_removed": present_to_remove, "raw": {}}
 
+    async def update_profile(self, email: str, first_name: str, last_name: str) -> dict[str, Any]:
+        existing = self.users.get(email.lower())
+        if not existing:
+            return {"success": False, "raw": {"message": "User does not exist"}}
+        existing["first_name"] = first_name
+        existing["last_name"] = last_name
+        return {"success": True, "raw": {}}
+
 
 class AdobeUMAPIClient:
     # Pagination loops call _request() once per page; a misbehaving Adobe
@@ -388,6 +396,24 @@ class AdobeUMAPIClient:
             raw = await self._request(http, "POST", url, json=command)
         errors = raw.get("errors", []) if isinstance(raw, dict) else []
         return {"success": not bool(errors), "test_only": test_only, "created": not bool(existing), "groups_added": missing, "groups_removed": present_to_remove, "raw": raw}
+
+    async def update_profile(self, email: str, first_name: str, last_name: str) -> dict[str, Any]:
+        """Rename an existing federated/enterprise-ID user via UMAPI's `update` action.
+
+        Adobe ID users manage their own profile outside UMAPI and reject this
+        action, so the caller (users.update_user_name) is expected to have
+        already checked identity_type before getting here — this only guards
+        against a live write while the app's write gate is off, same as
+        provision()'s real (non-test) path.
+        """
+        if not settings.adobe_write_enabled:
+            raise RuntimeError("Live writes are disabled. Set ADOBE_WRITE_ENABLED=true only after validating test mode.")
+        command = [{"user": email, "requestID": str(uuid.uuid4()), "do": [{"update": {"firstname": first_name, "lastname": last_name}}]}]
+        url = f"{settings.adobe_umapi_base_url}/action/{quote(settings.adobe_org_id, safe='@')}?testOnly=false"
+        async with self._new_http_client() as http:
+            raw = await self._request(http, "POST", url, json=command)
+        errors = raw.get("errors", []) if isinstance(raw, dict) else []
+        return {"success": not bool(errors), "raw": raw}
 
 
 client = MockAdobeClient() if settings.mock_adobe else AdobeUMAPIClient()

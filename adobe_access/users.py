@@ -6,9 +6,9 @@ from typing import Any
 import pandas as pd
 
 from .client import client
-from .database import read_managed_groups, read_managed_users
+from .database import list_projects, read_managed_groups, read_managed_users, update_managed_user_name
 from .provisioning import run
-from .utils import classify_special_permission, is_special_permission, normalize_group_match_key
+from .utils import classify_special_permission, is_special_permission, normalize_group_match_key, split_project_suffix
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -43,14 +43,51 @@ def lookup_user(email: str) -> dict[str, Any] | None:
     return result
 
 
-def browse_cached_users(query: str = "") -> pd.DataFrame:
+def update_user_name(email: str, first_name: str, last_name: str) -> dict[str, Any]:
+    """Rename an existing Adobe user (first/last name only) via UMAPI's `update`
+    action. Only meaningful for an existing user — this doesn't create one.
+
+    On success, also patches the local user-directory cache's row for this
+    email if it's cached (see database.update_managed_user_name), so Browse
+    synced users doesn't keep showing the pre-edit name until the next full
+    sync.
+    """
+    normalized = normalize_lookup_email(email)
+    first_name = first_name.strip()
+    last_name = last_name.strip()
+    try:
+        result = run(client.update_profile(normalized, first_name, last_name))
+    except Exception as exc:  # Keep UI/service error consistent without leaking stack traces.
+        raise UserLookupError(str(exc)) from exc
+    if result.get("success"):
+        update_managed_user_name(normalized, first_name, last_name)
+    return result
+
+
+def known_projects() -> list[str]:
+    """Saved project names plus any project suffix found on a cached user's last
+    name (e.g. users tagged before the project list existed), de-duplicated
+    case-insensitively with the saved spelling winning."""
+    names: dict[str, str] = {name.casefold(): name for name in list_projects()}
+    users = read_managed_users()
+    for last_name in users.get("last_name", pd.Series(dtype=str)):
+        _, project = split_project_suffix(str(last_name))
+        if project:
+            names.setdefault(project.casefold(), project)
+    return sorted(names.values(), key=str.casefold)
+
+
+def browse_cached_users(query: str = "", project: str = "") -> pd.DataFrame:
     """Browse the local user directory cache (populated by "Sync users" on the
     User search page) — no Adobe call. Each row's custom-group count is computed
     against the *current* group cache rather than stored at sync time, so it
     stays accurate even if groups are re-synced without re-syncing users.
+
+    `project`, when given, keeps only users whose last name carries that
+    "(ProjectName)" suffix (case-insensitive exact match).
     """
     users = read_managed_users()
-    columns = ["email", "display_name", "identity_type", "status", "custom_group_count"]
+    columns = ["email", "display_name", "project", "identity_type", "status", "custom_group_count"]
     if users.empty:
         return pd.DataFrame(columns=columns)
 
@@ -70,6 +107,7 @@ def browse_cached_users(query: str = "") -> pd.DataFrame:
         rows.append({
             "email": user["email"],
             "display_name": display_name,
+            "project": split_project_suffix(str(user.get("last_name") or ""))[1],
             "identity_type": user.get("identity_type") or "",
             "status": user.get("status") or "",
             "custom_group_count": custom_group_count,
@@ -83,6 +121,10 @@ def browse_cached_users(query: str = "") -> pd.DataFrame:
             | result["display_name"].str.casefold().str.contains(clean_query, na=False)
         )
         result = result[mask]
+
+    clean_project = project.strip().casefold()
+    if clean_project:
+        result = result[result["project"].str.casefold() == clean_project]
 
     return result.sort_values(
         "display_name", key=lambda col: col.astype(str).str.casefold()
