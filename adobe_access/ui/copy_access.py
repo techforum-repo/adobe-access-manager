@@ -212,12 +212,17 @@ def _render_preview_and_execute(source: dict) -> None:
     if project := st.session_state.get("copy_project", ""):
         st.caption(f'Project: **{project}** — new targets are created as "Lastname({project})"; all targets are linked to it locally after Execute.')
 
+    # Show the exact first/last name each target will be sent to Adobe with —
+    # for new targets that's the derived name plus any "(Project)" suffix.
+    users_df = _build_target_user_table()
+    active_preview = active_preview.merge(users_df[["email", "first_name", "last_name"]], on="email", how="left")
+
     only_changes = st.checkbox("Show only memberships that would be added", value=True, key="copy_only_changes")
     preview_view = active_preview[active_preview["will_add"]] if only_changes else active_preview
     st.dataframe(
-        preview_view[["email", "target_status", "group_display_name", "system", "membership_status"]].rename(columns={
-            "email": "Target email", "target_status": "User", "group_display_name": "Custom user group",
-            "system": "System", "membership_status": "Result"
+        preview_view[["email", "target_status", "first_name", "last_name", "group_display_name", "system", "membership_status"]].rename(columns={
+            "email": "Target email", "target_status": "User", "first_name": "First name", "last_name": "Last name",
+            "group_display_name": "Custom user group", "system": "System", "membership_status": "Result"
         }),
         width='stretch', hide_index=True,
     )
@@ -253,7 +258,6 @@ def _render_preview_and_execute(source: dict) -> None:
     st.divider()
     st.markdown("##### Run test / Execute")
     groups_to_apply = sorted(active_preview["adobe_group_name"].unique().tolist())
-    users_df = _build_target_user_table()
 
     if st.button(
         "Run test", type="secondary",
