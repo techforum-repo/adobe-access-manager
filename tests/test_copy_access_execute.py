@@ -199,6 +199,12 @@ def test_project_suffixes_new_targets_and_links_all_targets(temp_db, monkeypatch
     [b for b in at.button if b.label == "Build copy preview"][0].click().run(timeout=30)
     assert not at.exception
 
+    preview = [df.value for df in at.dataframe if "Last name" in getattr(df.value, "columns", [])][0]
+    names = preview.drop_duplicates("Target email").set_index("Target email")
+    assert names.loc["new.target@example.com", "First name"] == "New"
+    assert names.loc["new.target@example.com", "Last name"] == "Target(Apollo)"
+    assert names.loc["existing.target@example.com", "Last name"] == "Target"
+
     [w for w in at.checkbox if "I confirm this will make real changes" in w.label][0].set_value(True).run(timeout=30)
     [b for b in at.button if "Execute" in b.label][0].click().run(timeout=30)
     assert not at.exception
