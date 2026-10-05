@@ -177,3 +177,46 @@ def test_start_over_resets_the_page(temp_db):
     assert at.session_state["copy_target_text"] == ""
     assert not any("Loaded" in s.value for s in at.success), "should no longer show the previously loaded source"
     assert not [w for w in at.text_area if w.label == "Target users"], "gated content should be gone once source is cleared"
+
+
+def test_project_suffixes_new_targets_and_links_all_targets(temp_db, monkeypatch):
+    monkeypatch.setattr(settings, "adobe_write_enabled", True)
+    database.add_project("Apollo", "tester")
+    provisioning.client.users["existing.target@example.com"] = {
+        "email": "existing.target@example.com", "first_name": "Existing", "last_name": "Target",
+        "identity_type": "federatedID", "status": "active", "groups": set(),
+    }
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=30)
+    _sync_groups(at)
+    _goto(at, "Copy access")
+    [w for w in at.text_input if w.label == "Source user email"][0].set_value("source.user@example.com").run(timeout=30)
+    [b for b in at.button if b.label == "Load source user"][0].click().run(timeout=30)
+    [w for w in at.text_area if w.label == "Target users"][0].set_value(
+        "new.target@example.com\nexisting.target@example.com"
+    ).run(timeout=30)
+    at.selectbox(key="copy_project_input").set_value("Apollo").run(timeout=30)
+    [b for b in at.button if b.label == "Build copy preview"][0].click().run(timeout=30)
+    assert not at.exception
+
+    [w for w in at.checkbox if "I confirm this will make real changes" in w.label][0].set_value(True).run(timeout=30)
+    [b for b in at.button if "Execute" in b.label][0].click().run(timeout=30)
+    assert not at.exception
+
+    assert provisioning.client.users["new.target@example.com"]["last_name"] == "Target(Apollo)"
+    assert provisioning.client.users["existing.target@example.com"]["last_name"] == "Target", \
+        "existing users keep their Adobe name"
+    assert database.get_user_project("new.target@example.com") == "Apollo"
+    assert database.get_user_project("existing.target@example.com") == "Apollo"
+
+
+def test_no_project_leaves_last_name_and_links_untouched(temp_db, monkeypatch):
+    monkeypatch.setattr(settings, "adobe_write_enabled", True)
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=30)
+    _sync_groups(at)
+    _build_preview(at)
+    [w for w in at.checkbox if "I confirm this will make real changes" in w.label][0].set_value(True).run(timeout=30)
+    [b for b in at.button if "Execute" in b.label][0].click().run(timeout=30)
+    assert provisioning.client.users["new.target@example.com"]["last_name"] == "Target"
+    assert database.get_user_project("new.target@example.com") == ""

@@ -7,10 +7,18 @@ import streamlit as st
 
 from adobe_access.client import client
 from adobe_access.config import settings
-from adobe_access.database import record, save_execution, save_recent_request, update_request_status
+from adobe_access.database import (
+    add_project,
+    list_projects,
+    record,
+    save_execution,
+    save_recent_request,
+    set_user_project,
+    update_request_status,
+)
 from adobe_access.provisioning import execute, execution_summary, run
 from adobe_access.ui.shared import render_friendly_error
-from adobe_access.utils import derive_name, safe_csv
+from adobe_access.utils import derive_name, safe_csv, with_project_suffix
 from adobe_access.users import (
     UserLookupError,
     build_copy_access_preview,
@@ -92,7 +100,28 @@ def render() -> None:
         help="Enter one or more email addresses separated by lines, commas, or semicolons.",
         key="copy_target_text",
     )
+    p1, p2 = st.columns(2)
+    project_choice = p1.selectbox(
+        "Project (optional)",
+        ["", *list_projects(), _NEW_PROJECT],
+        format_func=lambda name: name or "(none)",
+        key="copy_project_input",
+        help='New target users get it in their Adobe last name as "Lastname(ProjectName)". Every target '
+        "(new or existing) is also linked to it in the local database after a successful Execute.",
+    )
+    project_name = project_choice
+    if project_choice == _NEW_PROJECT:
+        project_name = p2.text_input(
+            "New project name", key="copy_project_new",
+            help="Saved to the project list (also manageable in Settings) when you build the preview.",
+        ).strip()
     if st.button("Build copy preview", type="primary", disabled=not target_text.strip() or not selected_source_groups):
+        if project_choice == _NEW_PROJECT:
+            try:
+                add_project(project_name, st.session_state.actor)
+            except ValueError as exc:
+                st.error(str(exc))
+                return
         raw_targets = [v.strip().lower() for v in target_text.replace(",", "\n").replace(";", "\n").splitlines() if v.strip()]
         targets = list(dict.fromkeys(raw_targets))
         valid_targets = []
@@ -120,10 +149,16 @@ def render() -> None:
             st.session_state.copy_valid_targets = valid_targets
             st.session_state.copy_removed_groups = set()
             st.session_state.copy_last_request_id = None
+            # Captured with the preview so test/execute use the project the
+            # preview was built with, even if the picker changes afterward.
+            st.session_state.copy_project = project_name
             record(st.session_state.actor, "copy_access_preview", source.get("email", ""), selected_source_groups, "preview", f"Targets: {len(valid_targets)}")
             st.rerun()
 
     _render_preview_and_execute(source)
+
+
+_NEW_PROJECT = "+ New project…"
 
 
 def _reset_preview_state() -> None:
@@ -132,13 +167,18 @@ def _reset_preview_state() -> None:
     st.session_state.copy_target_users = []
     st.session_state.copy_valid_targets = []
     st.session_state.copy_last_request_id = None
+    st.session_state.copy_project = ""
 
 
 def _build_target_user_table() -> pd.DataFrame:
     """Reconstruct the users dataframe execute() expects from the targets
     looked up when the preview was built — deriving a first/last name for any
     target that doesn't exist yet in Adobe (lookup_user() has nothing to
-    derive it from since there's no Adobe record for a nonexistent user)."""
+    derive it from since there's no Adobe record for a nonexistent user).
+    Only those new targets get the "(Project)" last-name suffix; existing
+    users keep their Adobe name (trusted-domain names can't be changed) and
+    are linked to the project locally after Execute instead."""
+    project = st.session_state.get("copy_project", "")
     rows = []
     for email, target in zip(st.session_state.get("copy_valid_targets", []), st.session_state.get("copy_target_users", [])):
         if target:
@@ -146,7 +186,7 @@ def _build_target_user_table() -> pd.DataFrame:
             last_name = target.get("last_name") or ""
         else:
             parsed = derive_name(email)
-            first_name, last_name = parsed.first_name, parsed.last_name
+            first_name, last_name = parsed.first_name, with_project_suffix(parsed.last_name, project)
         rows.append({"email": email, "first_name": first_name, "last_name": last_name, "include": True})
     return pd.DataFrame(rows)
 
@@ -169,6 +209,8 @@ def _render_preview_and_execute(source: dict) -> None:
     c1.metric("Targets", targets_count)
     c2.metric("Memberships to add", additions)
     c3.metric("Already assigned", already)
+    if project := st.session_state.get("copy_project", ""):
+        st.caption(f'Project: **{project}** — new targets are created as "Lastname({project})"; all targets are linked to it locally after Execute.')
 
     only_changes = st.checkbox("Show only memberships that would be added", value=True, key="copy_only_changes")
     preview_view = active_preview[active_preview["will_add"]] if only_changes else active_preview
@@ -279,6 +321,9 @@ def _render_preview_and_execute(source: dict) -> None:
                 st.session_state.actor, "copy_access_execute", str(row["email"]),
                 groups_to_apply, "Success" if row["success"] else "Failed", detail,
             )
+        if project := st.session_state.get("copy_project", ""):
+            for email in results.loc[results["success"] == True, "email"]:  # noqa: E712
+                set_user_project(str(email), project, st.session_state.actor)
         st.success(f"Execution #{execution_id} complete.")
         e1, e2, e3, e4, e5, e6 = st.columns(6)
         e1.metric("Created", exec_summary["created"])
