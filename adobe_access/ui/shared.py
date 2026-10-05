@@ -41,6 +41,7 @@ DEFAULT_STATE = {
     "copy_target_users": [],
     "copy_valid_targets": [],
     "copy_last_request_id": None,
+    "copy_project": "",
     "compare_left": None,
     "compare_right": None,
     "compare_result": pd.DataFrame(),
