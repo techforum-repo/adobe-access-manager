@@ -1,3 +1,5 @@
+> **This repository has moved.** It now lives in [`martech-architect-toolkit/adobe-access-manager`](https://github.com/techforum-repo/martech-architect-toolkit/tree/main/adobe-access-manager), with its full commit history. This repo is archived and read-only.
+
 # Adobe Access Manager 1.0
 
 A Streamlit application for validating users against your domain, reading Adobe custom user
